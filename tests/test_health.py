@@ -8,7 +8,6 @@ with health checks and failure injection.
 
 from __future__ import annotations
 
-import random
 import pytest
 
 from cluster.generator import generate_cluster
@@ -17,15 +16,15 @@ from cluster.state import ClusterState
 from deploy.config import DeploymentConfig
 from deploy.engine import DeploymentEngine
 from deploy.state import DeploymentStatus
-from health.thresholds import HealthThresholds
-from health.metrics import simulate_server_metrics, evaluate_server_health
-from health.failure_injection import inject_failures
 from health.analyzer import analyze, create_health_check_fn
-
+from health.failure_injection import inject_failures
+from health.metrics import evaluate_server_health, simulate_server_metrics
+from health.thresholds import HealthThresholds
 
 # ======================================================================
 # HealthThresholds Tests
 # ======================================================================
+
 
 class TestHealthThresholds:
     """Tests for HealthThresholds initialization and validation."""
@@ -66,6 +65,7 @@ class TestHealthThresholds:
 # ======================================================================
 # Metrics Simulation & Server Evaluation Tests
 # ======================================================================
+
 
 class TestMetricsAndServerEvaluation:
     """Tests for simulated metrics and individual server health checks."""
@@ -150,6 +150,7 @@ class TestMetricsAndServerEvaluation:
 # Failure Injection Tests
 # ======================================================================
 
+
 class TestFailureInjection:
     """Tests for the inject_failures utility."""
 
@@ -225,6 +226,7 @@ class TestFailureInjection:
 # Cluster Analyzer Tests
 # ======================================================================
 
+
 class TestClusterAnalyzer:
     """Tests for cluster-wide health report analysis."""
 
@@ -253,7 +255,9 @@ class TestClusterAnalyzer:
         assert report.overall_passed is False
         assert any("Degraded server percentage" in check for check in report.failed_checks)
 
-    def test_analyze_cluster_failing_due_to_failed_server(self, cluster_state: ClusterState) -> None:
+    def test_analyze_cluster_failing_due_to_failed_server(
+        self, cluster_state: ClusterState
+    ) -> None:
         """Cluster fails if any server is in FAILED status (threshold=0.0)."""
         # Fail 1 server
         inject_failures(cluster_state, failure_rate=0.1, failure_type="fail", seed=42)
@@ -275,6 +279,7 @@ class TestClusterAnalyzer:
 # ======================================================================
 # Integration Tests
 # ======================================================================
+
 
 class TestDeploymentHealthCheckIntegration:
     """End-to-end integration tests between deployment engine and health analyzer."""

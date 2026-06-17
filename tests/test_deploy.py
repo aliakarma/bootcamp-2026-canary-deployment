@@ -17,10 +17,9 @@ import pytest
 from cluster.generator import generate_cluster
 from cluster.models import ServerStatus
 from cluster.state import ClusterState
-from deploy.config import DeploymentConfig, DEFAULT_STAGES
+from deploy.config import DEFAULT_STAGES, DeploymentConfig
 from deploy.engine import DeploymentEngine
 from deploy.state import DeploymentState, DeploymentStatus, StageResult
-
 
 # ======================================================================
 # DeploymentConfig
@@ -67,23 +66,17 @@ class TestDeploymentConfig:
     def test_negative_delay_rejected(self) -> None:
         """Negative stage delay is rejected."""
         with pytest.raises(ValueError, match="stage_delay_seconds"):
-            DeploymentConfig(
-                target_version="2.0.0", stage_delay_seconds=-1.0
-            )
+            DeploymentConfig(target_version="2.0.0", stage_delay_seconds=-1.0)
 
     def test_negative_health_check_interval_rejected(self) -> None:
         """Negative health check interval is rejected."""
         with pytest.raises(ValueError, match="health_check_interval"):
-            DeploymentConfig(
-                target_version="2.0.0", health_check_interval=-1.0
-            )
+            DeploymentConfig(target_version="2.0.0", health_check_interval=-1.0)
 
     def test_negative_retries_rejected(self) -> None:
         """Negative retries count is rejected."""
         with pytest.raises(ValueError, match="max_retries_per_stage"):
-            DeploymentConfig(
-                target_version="2.0.0", max_retries_per_stage=-1
-            )
+            DeploymentConfig(target_version="2.0.0", max_retries_per_stage=-1)
 
     def test_str_representation(self) -> None:
         """String representation includes key fields."""
@@ -101,9 +94,7 @@ class TestDeploymentConfig:
 
     def test_zero_delay(self) -> None:
         """Zero delay is valid (no wait between stages)."""
-        cfg = DeploymentConfig(
-            target_version="2.0.0", stage_delay_seconds=0.0
-        )
+        cfg = DeploymentConfig(target_version="2.0.0", stage_delay_seconds=0.0)
         assert cfg.stage_delay_seconds == 0.0
 
 
@@ -121,8 +112,7 @@ class TestDeploymentState:
             target_version="2.0.0",
             source_version="1.0.0",
             total_servers=10,
-            servers_pending={"s1", "s2", "s3", "s4", "s5",
-                             "s6", "s7", "s8", "s9", "s10"},
+            servers_pending={"s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"},
         )
 
     def test_initial_status(self) -> None:
@@ -252,9 +242,7 @@ class TestDeploymentEngine:
         assert result.is_terminal is True
         assert result.progress_percentage == 100.0
 
-    def test_all_servers_updated_to_target_version(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_all_servers_updated_to_target_version(self, cluster_state: ClusterState) -> None:
         """After deployment, all servers run the target version."""
         config = DeploymentConfig(
             target_version="2.0.0",
@@ -267,9 +255,7 @@ class TestDeploymentEngine:
         for server in cluster_state.servers:
             assert server.current_version == "2.0.0"
 
-    def test_all_servers_healthy_after_deployment(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_all_servers_healthy_after_deployment(self, cluster_state: ClusterState) -> None:
         """After successful deployment, all updated servers are HEALTHY."""
         config = DeploymentConfig(
             target_version="2.0.0",
@@ -333,9 +319,7 @@ class TestPercentageBasedUpdates:
     def cluster_state(self) -> ClusterState:
         return ClusterState(generate_cluster(size=20, seed=42))
 
-    def test_stage_updates_correct_percentage(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_stage_updates_correct_percentage(self, cluster_state: ClusterState) -> None:
         """Each stage updates the correct cumulative percentage of servers."""
         config = DeploymentConfig(
             target_version="2.0.0",
@@ -352,9 +336,7 @@ class TestPercentageBasedUpdates:
         # Stage 2: 100% of 20 = 20, minus 10 already done = 10 more
         assert len(result.stages[2].servers_updated) == 10
 
-    def test_stage_percentages_are_cumulative(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_stage_percentages_are_cumulative(self, cluster_state: ClusterState) -> None:
         """Cumulative server count matches each stage's target percentage."""
         config = DeploymentConfig(
             target_version="2.0.0",
@@ -495,10 +477,7 @@ class TestRolloutSequencing:
 
         assert len(result.stages) == 5
         for i in range(len(result.stages) - 1):
-            assert (
-                result.stages[i].target_percentage
-                < result.stages[i + 1].target_percentage
-            )
+            assert result.stages[i].target_percentage < result.stages[i + 1].target_percentage
 
     def test_no_server_updated_twice(self, cluster_state: ClusterState) -> None:
         """No server is updated more than once across all stages."""
@@ -544,9 +523,7 @@ class TestHealthCheckIntegration:
         for stage in result.stages:
             assert stage.health_check_passed is True
 
-    def test_health_check_failure_triggers_rollback(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_health_check_failure_triggers_rollback(self, cluster_state: ClusterState) -> None:
         """Deployment rolls back when health check fails."""
         call_count = 0
 
@@ -569,9 +546,7 @@ class TestHealthCheckIntegration:
         assert result.status == DeploymentStatus.ROLLED_BACK
         assert "Health check failed" in (result.error_message or "")
 
-    def test_health_check_failure_after_first_stage(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_health_check_failure_after_first_stage(self, cluster_state: ClusterState) -> None:
         """Servers are rolled back when health check fails after stage 1."""
         stage_count = [0]
 
@@ -595,9 +570,7 @@ class TestHealthCheckIntegration:
         for server in cluster_state.servers:
             assert server.current_version == "1.0.0"
 
-    def test_health_check_retry_then_pass(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_health_check_retry_then_pass(self, cluster_state: ClusterState) -> None:
         """Health check retries and eventually passes."""
         attempt = [0]
 
@@ -618,10 +591,9 @@ class TestHealthCheckIntegration:
 
         assert result.status == DeploymentStatus.COMPLETED
 
-    def test_health_check_exception_treated_as_failure(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_health_check_exception_treated_as_failure(self, cluster_state: ClusterState) -> None:
         """Health check exceptions are treated as failures."""
+
         def exploding_check(cs: ClusterState) -> bool:
             raise RuntimeError("health check crashed")
 
@@ -736,9 +708,7 @@ class TestAbortHandling:
 
         assert result.status == DeploymentStatus.ABORTED
 
-    def test_abort_during_inter_stage_wait(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_abort_during_inter_stage_wait(self, cluster_state: ClusterState) -> None:
         """Abort signal during inter-stage wait stops deployment."""
         abort_event = threading.Event()
 
@@ -765,9 +735,7 @@ class TestAbortHandling:
         # Should not have waited the full 5 seconds
         assert elapsed < 3.0
 
-    def test_abort_rolls_back_updated_servers(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_abort_rolls_back_updated_servers(self, cluster_state: ClusterState) -> None:
         """Aborted deployment rolls back servers that were already updated."""
         abort_event = threading.Event()
 
@@ -792,9 +760,7 @@ class TestAbortHandling:
         for server in cluster_state.servers:
             assert server.current_version == "1.0.0"
 
-    def test_abort_mid_stage_rollout(
-        self, cluster_state: ClusterState
-    ) -> None:
+    def test_abort_mid_stage_rollout(self, cluster_state: ClusterState) -> None:
         """Abort signal set mid-stage sets deployment status to ABORTED (not ROLLED_BACK)."""
         abort_event = threading.Event()
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+
 import pytest
 
 from cluster.generator import generate_cluster
@@ -17,15 +18,15 @@ from cluster.models import ServerStatus
 from cluster.state import ClusterState
 from deploy.config import DeploymentConfig
 from deploy.engine import DeploymentEngine
-from deploy.state import DeploymentState, DeploymentStatus
 from deploy.rollback import (
-    deserialize_deployment_state,
-    save_deployment_state,
-    load_deployment_state,
-    validate_rollback_consistency,
-    rollback,
     RollbackConsistencyError,
+    deserialize_deployment_state,
+    load_deployment_state,
+    rollback,
+    save_deployment_state,
+    validate_rollback_consistency,
 )
+from deploy.state import DeploymentState, DeploymentStatus
 
 
 class TestRollbackSystem:
@@ -50,7 +51,9 @@ class TestRollbackSystem:
     # Serialization / Deserialization
     # ------------------------------------------------------------------
 
-    def test_serialization_deserialization_roundtrip(self, completed_deployment: DeploymentState) -> None:
+    def test_serialization_deserialization_roundtrip(
+        self, completed_deployment: DeploymentState
+    ) -> None:
         """to_dict() and deserialize_deployment_state roundtrip yields equivalent objects."""
         d = completed_deployment.to_dict()
         restored = deserialize_deployment_state(d)
@@ -105,12 +108,16 @@ class TestRollbackSystem:
     # Consistency Validation
     # ------------------------------------------------------------------
 
-    def test_validate_consistency_passing(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_validate_consistency_passing(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Consistent cluster state returns empty validation report."""
         errors = validate_rollback_consistency(cluster_state, completed_deployment)
         assert not errors
 
-    def test_validate_consistency_server_missing(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_validate_consistency_server_missing(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Validation detects when an updated server has been deleted from the cluster state."""
         # Mutate the cluster dictionary to delete a server
         server_id = list(completed_deployment.servers_updated)[0]
@@ -121,7 +128,9 @@ class TestRollbackSystem:
         assert server_id in errors
         assert "not found" in errors[server_id]
 
-    def test_validate_consistency_version_drift(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_validate_consistency_version_drift(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Validation detects if a server runs a version other than the target version."""
         server_id = list(completed_deployment.servers_updated)[0]
         # Simulate drift by reverting that node to v1.0.0 manually
@@ -135,7 +144,9 @@ class TestRollbackSystem:
     # Rollback Execution
     # ------------------------------------------------------------------
 
-    def test_rollback_success(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_rollback_success(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Successful rollback restores all nodes to source version and updates deployment status."""
         original_updated_count = len(completed_deployment.servers_updated)
         rolled_back = rollback(cluster_state, completed_deployment)
@@ -150,7 +161,9 @@ class TestRollbackSystem:
             assert server.current_version == "1.0.0"
             assert server.status == ServerStatus.HEALTHY
 
-    def test_rollback_fails_on_inconsistency(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_rollback_fails_on_inconsistency(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Rollback raises RollbackConsistencyError if drift is detected."""
         server_id = list(completed_deployment.servers_updated)[0]
         # Introduce manual drift
@@ -165,7 +178,9 @@ class TestRollbackSystem:
         # Status of deployment remains unchanged (completed)
         assert completed_deployment.status == DeploymentStatus.COMPLETED
 
-    def test_rollback_force_mode(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_rollback_force_mode(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Verify rollback runs anyway if force=True, bypassing inconsistencies."""
         server_id_drift = list(completed_deployment.servers_updated)[0]
         server_id_missing = list(completed_deployment.servers_updated)[1]
@@ -190,7 +205,9 @@ class TestRollbackSystem:
     # Engine Integration
     # ------------------------------------------------------------------
 
-    def test_engine_rollback_integration(self, cluster_state: ClusterState, completed_deployment: DeploymentState) -> None:
+    def test_engine_rollback_integration(
+        self, cluster_state: ClusterState, completed_deployment: DeploymentState
+    ) -> None:
         """Verify engine.rollback() delegates and reverts target deployment."""
         engine = DeploymentEngine(cluster_state)
         rolled_back = engine.rollback(completed_deployment)
@@ -206,7 +223,7 @@ class TestRollbackSystem:
             "target_version": "2.0.0",
             "source_version": "1.0.0",
             "status": "completed",
-            "started_at": "2026-06-17T22:15:42"
+            "started_at": "2026-06-17T22:15:42",
         }
         restored = deserialize_deployment_state(minimal_dict)
         assert restored.deployment_id == "dep-999"

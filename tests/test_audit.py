@@ -10,15 +10,14 @@ import os
 import tempfile
 import threading
 import time
-import pytest
 
 from cluster.generator import generate_cluster
 from cluster.state import ClusterState
+from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
 from deploy.config import DeploymentConfig
 from deploy.engine import DeploymentEngine
-from deploy.state import DeploymentStatus
 from deploy.rollback import rollback
-from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
+from deploy.state import DeploymentStatus
 
 
 class TestAuditLogging:
@@ -168,6 +167,7 @@ class TestAuditLogging:
 
         # Start in separate thread so we can trigger abort
         res_container = []
+
         def deploy_thread() -> None:
             res_container.append(engine.deploy(config))
 

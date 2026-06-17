@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import pytest
 
-from cluster.models import Server, ServerStatus
-from cluster.generator import generate_cluster, DEFAULT_MIN_SERVERS, DEFAULT_MAX_SERVERS
-from cluster.state import ClusterState
+from cluster.generator import DEFAULT_MAX_SERVERS, DEFAULT_MIN_SERVERS, generate_cluster
 from cluster.inspector import inspect_cluster
-
+from cluster.models import Server, ServerStatus
+from cluster.state import ClusterState
 
 # ======================================================================
 # Models
 # ======================================================================
+
 
 class TestServerModel:
     """Tests for the Server dataclass and ServerStatus enum."""
@@ -109,6 +109,7 @@ class TestServerModel:
 # Generator
 # ======================================================================
 
+
 class TestClusterGenerator:
     """Tests for cluster generation."""
 
@@ -173,6 +174,7 @@ class TestClusterGenerator:
 # ======================================================================
 # State Management
 # ======================================================================
+
 
 class TestClusterState:
     """Tests for ClusterState manager."""
@@ -299,6 +301,7 @@ class TestClusterState:
 # ======================================================================
 # Inspector
 # ======================================================================
+
 
 class TestClusterInspector:
     """Tests for the cluster inspection utility."""

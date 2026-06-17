@@ -10,6 +10,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+
 import pytest
 
 from deploy.abort_listener import ConsoleAbortListener
@@ -45,7 +46,9 @@ class TestAbortListener:
     def listener(self, mock_stream: MockInputStream) -> ConsoleAbortListener:
         return ConsoleAbortListener(mock_stream)
 
-    def test_listener_lifecycle(self, listener: ConsoleAbortListener, mock_stream: MockInputStream) -> None:
+    def test_listener_lifecycle(
+        self, listener: ConsoleAbortListener, mock_stream: MockInputStream
+    ) -> None:
         """Verify listener starts and stops without errors."""
         listener.start()
         # Verify double start is idempotent
