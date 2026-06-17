@@ -33,6 +33,7 @@ from cluster.models import ServerStatus
 from cluster.state import ClusterState
 from deploy.config import DeploymentConfig
 from deploy.state import DeploymentState, DeploymentStatus, StageResult
+from deploy.audit import DeploymentEvent, DeploymentEventType
 
 logger = get_logger(__name__)
 
@@ -51,6 +52,7 @@ class DeploymentEngine:
     def __init__(self, cluster_state: ClusterState) -> None:
         self._cluster = cluster_state
         self._current_deployment: DeploymentState | None = None
+        self._current_config: DeploymentConfig | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -62,7 +64,12 @@ class DeploymentEngine:
         recent) deployment, or ``None`` if no deployment has been run."""
         return self._current_deployment
 
-    def rollback(self, deployment: DeploymentState, force: bool = False) -> list[str]:
+    def rollback(
+        self,
+        deployment: DeploymentState,
+        force: bool = False,
+        audit_logger: Any | None = None,
+    ) -> list[str]:
         """Execute a rollback on a previously run deployment.
 
         Validates cluster consistency before executing.
@@ -70,12 +77,16 @@ class DeploymentEngine:
         Args:
             deployment: The DeploymentState representing the rollout to revert.
             force: If True, bypass consistency checks and revert matching nodes anyway.
+            audit_logger: Optional AuditLogger. Falls back to deployment config logger.
 
         Returns:
             List of successfully rolled back server IDs.
         """
         from deploy.rollback import rollback as run_rollback
-        return run_rollback(self._cluster, deployment, force=force)
+        logger_to_use = audit_logger
+        if logger_to_use is None and self._current_config is not None:
+            logger_to_use = self._current_config.audit_logger
+        return run_rollback(self._cluster, deployment, force=force, audit_logger=logger_to_use)
 
     def deploy(self, config: DeploymentConfig) -> DeploymentState:
         """Execute a full canary deployment.
@@ -95,6 +106,7 @@ class DeploymentEngine:
         """
         deployment = self._init_deployment(config)
         self._current_deployment = deployment
+        self._current_config = config
 
         logger.info("=" * 60)
         logger.info(
@@ -106,6 +118,16 @@ class DeploymentEngine:
         logger.info("  Stages: %s", config)
         logger.info("  Total servers: %d", deployment.total_servers)
         logger.info("=" * 60)
+
+        self._record_event(
+            DeploymentEventType.DEPLOYMENT_START,
+            {
+                "target_version": config.target_version,
+                "source_version": deployment.source_version,
+                "total_servers": deployment.total_servers,
+                "stages": config.stages,
+            },
+        )
 
         deployment.status = DeploymentStatus.IN_PROGRESS
 
@@ -125,6 +147,15 @@ class DeploymentEngine:
                     deployment, config, stage_idx, target_pct
                 )
                 deployment.stages.append(stage_result)
+
+                self._record_event(
+                    DeploymentEventType.STAGE_TRANSITION,
+                    {
+                        "stage_index": stage_idx,
+                        "target_percentage": target_pct,
+                        "servers_updated": list(stage_result.servers_updated),
+                    },
+                )
 
                 if stage_result.error:
                     # Stage failed — check if due to abort
@@ -151,9 +182,20 @@ class DeploymentEngine:
                 )
                 stage_result.health_check_passed = health_passed
 
+                self._record_event(
+                    DeploymentEventType.HEALTH_CHECK,
+                    {
+                        "stage_index": stage_idx,
+                        "target_percentage": target_pct,
+                        "status": "pass" if health_passed else "fail",
+                        "retry_count": 0,
+                    },
+                )
+
                 if not health_passed:
                     # Health check failed — handle retries
                     retries_remaining = config.max_retries_per_stage
+                    retry_idx = 1
                     while retries_remaining > 0 and not health_passed:
                         logger.warning(
                             "Health check FAILED for stage %d (%d%%). "
@@ -164,7 +206,18 @@ class DeploymentEngine:
                         health_passed = self._run_health_check(
                             config, stage_idx, target_pct
                         )
+
+                        self._record_event(
+                            DeploymentEventType.HEALTH_CHECK,
+                            {
+                                "stage_index": stage_idx,
+                                "target_percentage": target_pct,
+                                "status": "pass" if health_passed else "fail",
+                                "retry_count": retry_idx,
+                            },
+                        )
                         retries_remaining -= 1
+                        retry_idx += 1
 
                     if not health_passed:
                         stage_result.health_check_passed = False
@@ -233,6 +286,15 @@ class DeploymentEngine:
             )
             logger.info("=" * 60)
 
+            self._record_event(
+                DeploymentEventType.DEPLOYMENT_COMPLETED,
+                {
+                    "target_version": deployment.target_version,
+                    "duration_seconds": deployment.duration_seconds,
+                    "servers_updated": list(deployment.servers_updated),
+                },
+            )
+
             # Mark all updated servers as HEALTHY
             for server_id in deployment.servers_updated:
                 self._cluster.update_server_status(server_id, ServerStatus.HEALTHY)
@@ -240,6 +302,12 @@ class DeploymentEngine:
         except Exception as exc:
             logger.exception("Unexpected error during deployment: %s", exc)
             deployment.mark_failed(f"Unexpected error: {exc}")
+            self._record_event(
+                DeploymentEventType.DEPLOYMENT_FAILED,
+                {"error": str(exc), "stage_index": deployment.current_stage_index},
+            )
+        finally:
+            self._current_config = None
 
         return deployment
 
@@ -465,7 +533,15 @@ class DeploymentEngine:
     ) -> None:
         """Handle an abort signal: log, mark state, trigger rollback."""
         logger.warning("DEPLOYMENT ABORTED: %s", reason)
+        self._record_event(
+            DeploymentEventType.ABORT_RECEIVED,
+            {"reason": reason},
+        )
         deployment.mark_aborted(reason)
+        self._record_event(
+            DeploymentEventType.DEPLOYMENT_FAILED,
+            {"error": f"Aborted: {reason}", "stage_index": deployment.current_stage_index},
+        )
         self._rollback_updated_servers(deployment)
 
     # ------------------------------------------------------------------
@@ -479,6 +555,10 @@ class DeploymentEngine:
         logger.warning("INITIATING ROLLBACK: %s", reason)
         deployment.mark_rolling_back()
         deployment.error_message = reason
+        self._record_event(
+            DeploymentEventType.DEPLOYMENT_FAILED,
+            {"error": reason, "stage_index": deployment.current_stage_index},
+        )
         self._rollback_updated_servers(deployment)
         deployment.mark_rolled_back()
         logger.info(
@@ -489,14 +569,32 @@ class DeploymentEngine:
 
     def _rollback_updated_servers(self, deployment: DeploymentState) -> None:
         """Revert all servers that were updated during this deployment."""
+        self._record_event(
+            DeploymentEventType.ROLLBACK_START,
+            {
+                "reason": deployment.error_message or "Automatic rollback",
+                "source_version": deployment.source_version,
+                "servers_to_rollback": list(deployment.servers_updated),
+            },
+        )
+
+        rolled_back_ids = []
         for server_id in list(deployment.servers_updated):
             success = self._cluster.rollback_server(server_id)
             if success:
+                rolled_back_ids.append(server_id)
                 logger.info("  Rolled back server %s", server_id)
             else:
                 logger.error(
                     "  Failed to rollback server %s", server_id
                 )
+
+        self._record_event(
+            DeploymentEventType.ROLLBACK_COMPLETE,
+            {
+                "servers_rolled_back": rolled_back_ids,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Initialisation helpers
@@ -521,3 +619,18 @@ class DeploymentEngine:
         )
 
         return deployment
+
+    def _record_event(
+        self,
+        event_type: DeploymentEventType,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Helper to log structured events to the configured audit logger."""
+        if self._current_config is not None and self._current_config.audit_logger is not None:
+            if self._current_deployment is not None:
+                event = DeploymentEvent(
+                    event_type=event_type,
+                    deployment_id=self._current_deployment.deployment_id,
+                    details=details,
+                )
+                self._current_config.audit_logger.log(event)

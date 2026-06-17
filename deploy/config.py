@@ -56,6 +56,7 @@ class DeploymentConfig:
     on_stage_complete: Callable[..., Any] | None = None
     abort_event: Any | None = None  # threading.Event — typed as Any to avoid import
     max_retries_per_stage: int = 1
+    audit_logger: Any | None = None  # deploy.audit.AuditLogger
 
     # ------------------------------------------------------------------
     # Validation

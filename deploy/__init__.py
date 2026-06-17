@@ -16,6 +16,8 @@ from deploy.rollback import (
     validate_rollback_consistency,
     RollbackConsistencyError,
 )
+from deploy.abort_listener import ConsoleAbortListener
+from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
 
 __all__ = [
     "DeploymentConfig",
@@ -27,4 +29,8 @@ __all__ = [
     "load_deployment_state",
     "validate_rollback_consistency",
     "RollbackConsistencyError",
+    "ConsoleAbortListener",
+    "AuditLogger",
+    "DeploymentEvent",
+    "DeploymentEventType",
 ]

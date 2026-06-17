@@ -8,11 +8,13 @@ rollbacks on previously deployed states in a simulated server cluster.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
 from logging_config import get_logger
 from deploy.state import DeploymentState, DeploymentStatus, StageResult
+from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
 
 if TYPE_CHECKING:
     from cluster.state import ClusterState
@@ -99,6 +101,12 @@ def save_deployment_state(state: DeploymentState, filepath: str) -> None:
     """
     logger.info("Saving deployment state %s to %s ...", state.deployment_id, filepath)
     try:
+        # Ensure target directory exists to prevent FileNotFoundError
+        if filepath:
+            dirname = os.path.dirname(filepath)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
+
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(state.to_dict(), f, indent=4)
         logger.debug("Successfully saved deployment state %s", state.deployment_id)
@@ -176,6 +184,7 @@ def rollback(
     cluster_state: ClusterState,
     deployment_state: DeploymentState,
     force: bool = False,
+    audit_logger: AuditLogger | None = None,
 ) -> list[str]:
     """Rollback updated servers in the cluster to their pre-deployment versions.
 
@@ -183,6 +192,7 @@ def rollback(
         cluster_state: The ClusterState to update.
         deployment_state: The DeploymentState tracker containing updated server lists.
         force: If True, bypass consistency errors and roll back matching nodes anyway.
+        audit_logger: Optional AuditLogger.
 
     Returns:
         List of successfully rolled back server IDs.
@@ -200,6 +210,19 @@ def rollback(
     if errors and not force:
         err_msg = f"Cannot rollback deployment {deployment_state.deployment_id}: consistency check failed."
         raise RollbackConsistencyError(err_msg, errors)
+
+    if audit_logger is not None:
+        audit_logger.log(
+            DeploymentEvent(
+                event_type=DeploymentEventType.ROLLBACK_START,
+                deployment_id=deployment_state.deployment_id,
+                details={
+                    "reason": "Manual rollback execution" if not force else "Forced manual rollback execution",
+                    "source_version": deployment_state.source_version,
+                    "servers_to_rollback": list(deployment_state.servers_updated),
+                },
+            )
+        )
 
     deployment_state.mark_rolling_back()
     rolled_back_ids: list[str] = []
@@ -221,6 +244,17 @@ def rollback(
                 logger.error("Failed to rollback server %s in cluster state", server_id)
 
         deployment_state.mark_rolled_back()
+
+        if audit_logger is not None:
+            audit_logger.log(
+                DeploymentEvent(
+                    event_type=DeploymentEventType.ROLLBACK_COMPLETE,
+                    deployment_id=deployment_state.deployment_id,
+                    details={
+                        "servers_rolled_back": rolled_back_ids,
+                    },
+                )
+            )
     except Exception as exc:
         logger.exception("Unexpected error during rollback loop: %s", exc)
         deployment_state.mark_failed(f"Rollback failed: {exc}")
