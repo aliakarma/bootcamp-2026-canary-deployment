@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from logging_config import get_logger
-from deploy.state import DeploymentState, DeploymentStatus, StageResult
 from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
+from deploy.state import DeploymentState, DeploymentStatus, StageResult
+from logging_config import get_logger
 
 if TYPE_CHECKING:
     from cluster.state import ClusterState
@@ -48,11 +48,7 @@ def deserialize_deployment_state(d: dict[str, Any]) -> DeploymentState:
         started_at_str = s_dict.get("started_at")
         started_at = datetime.fromisoformat(started_at_str) if started_at_str else datetime.now()
         completed_at_str = s_dict.get("completed_at")
-        completed_at = (
-            datetime.fromisoformat(completed_at_str)
-            if completed_at_str
-            else None
-        )
+        completed_at = datetime.fromisoformat(completed_at_str) if completed_at_str else None
         stage = StageResult(
             stage_index=s_dict.get("stage_index", 0),
             target_percentage=s_dict.get("target_percentage", 0),
@@ -69,11 +65,7 @@ def deserialize_deployment_state(d: dict[str, Any]) -> DeploymentState:
     started_at_str = d.get("started_at")
     started_at = datetime.fromisoformat(started_at_str) if started_at_str else datetime.now()
     completed_at_str = d.get("completed_at")
-    completed_at = (
-        datetime.fromisoformat(completed_at_str)
-        if completed_at_str
-        else None
-    )
+    completed_at = datetime.fromisoformat(completed_at_str) if completed_at_str else None
 
     state = DeploymentState(
         deployment_id=d.get("deployment_id", ""),
@@ -153,7 +145,9 @@ def validate_rollback_consistency(
     Returns:
         A dictionary mapping server ID to mismatch reasons. Empty if consistent.
     """
-    logger.info("Validating rollback consistency for deployment %s ...", deployment_state.deployment_id)
+    logger.info(
+        "Validating rollback consistency for deployment %s ...", deployment_state.deployment_id
+    )
     errors: dict[str, str] = {}
 
     for server_id in deployment_state.servers_updated:
@@ -217,7 +211,11 @@ def rollback(
                 event_type=DeploymentEventType.ROLLBACK_START,
                 deployment_id=deployment_state.deployment_id,
                 details={
-                    "reason": "Manual rollback execution" if not force else "Forced manual rollback execution",
+                    "reason": (
+                        "Manual rollback execution"
+                        if not force
+                        else "Forced manual rollback execution"
+                    ),
                     "source_version": deployment_state.source_version,
                     "servers_to_rollback": list(deployment_state.servers_updated),
                 },
@@ -237,6 +235,10 @@ def rollback(
                 continue
 
             # Check if rollback can be executed
+            if server.current_version == deployment_state.source_version:
+                rolled_back_ids.append(server_id)
+                continue
+
             success = cluster_state.rollback_server(server_id)
             if success:
                 rolled_back_ids.append(server_id)

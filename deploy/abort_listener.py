@@ -115,7 +115,9 @@ class ConsoleAbortListener:
                             )
                             self._current_event.set()
                         else:
-                            logger.debug("Abort command received but no deployment event was active")
+                            logger.debug(
+                                "Abort command received but no deployment event was active"
+                            )
             except Exception as exc:
                 logger.error("Exception in abort listener thread: %s", exc)
                 break

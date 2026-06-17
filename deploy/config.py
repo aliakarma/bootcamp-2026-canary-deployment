@@ -9,8 +9,7 @@ controls, and health-check hooks.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Any
-
+from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
 # Default stage percentages for canary deployment
@@ -57,6 +56,8 @@ class DeploymentConfig:
     abort_event: Any | None = None  # threading.Event — typed as Any to avoid import
     max_retries_per_stage: int = 1
     audit_logger: Any | None = None  # deploy.audit.AuditLogger
+    governance_coordinator: Any | None = None  # governance.coordinator.GovernanceCoordinator
+    quarantine_system: Any | None = None  # resilience.quarantine.RegionQuarantineSystem
 
     # ------------------------------------------------------------------
     # Validation
@@ -69,9 +70,7 @@ class DeploymentConfig:
 
         for i, pct in enumerate(self.stages):
             if not (1 <= pct <= 100):
-                raise ValueError(
-                    f"Stage {i} percentage must be 1-100, got {pct}"
-                )
+                raise ValueError(f"Stage {i} percentage must be 1-100, got {pct}")
             if i > 0 and pct <= self.stages[i - 1]:
                 raise ValueError(
                     f"Stages must be monotonically increasing: "
@@ -79,9 +78,7 @@ class DeploymentConfig:
                 )
 
         if self.stages[-1] != 100:
-            raise ValueError(
-                f"Last stage must be 100%, got {self.stages[-1]}%"
-            )
+            raise ValueError(f"Last stage must be 100%, got {self.stages[-1]}%")
 
         if self.stage_delay_seconds < 0:
             raise ValueError("stage_delay_seconds must be >= 0")
