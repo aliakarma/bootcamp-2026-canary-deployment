@@ -119,6 +119,44 @@ class ClusterState:
             )
             return True
 
+    def update_server_resources(
+        self,
+        server_id: str,
+        cpu_usage: float,
+        memory_usage: float,
+    ) -> bool:
+        """Update a server's simulated resource utilization metrics.
+
+        Args:
+            server_id: ID of the server to update.
+            cpu_usage: The new CPU usage percentage.
+            memory_usage: The new memory usage percentage.
+
+        Returns:
+            ``True`` if the update succeeded, ``False`` if the server was
+            not found.
+        """
+        with self._lock:
+            server = self._servers.get(server_id)
+            if server is None:
+                logger.warning("Cannot update resources: server '%s' not found", server_id)
+                return False
+
+            old_cpu = server.cpu_usage
+            old_mem = server.memory_usage
+            server.cpu_usage = max(0.0, min(100.0, cpu_usage))
+            server.memory_usage = max(0.0, min(100.0, memory_usage))
+
+            logger.debug(
+                "Server %s resources: CPU %.1f%% → %.1f%%, MEM %.1f%% → %.1f%%",
+                server_id,
+                old_cpu,
+                server.cpu_usage,
+                old_mem,
+                server.memory_usage,
+            )
+            return True
+
     def update_server_version(
         self,
         server_id: str,
