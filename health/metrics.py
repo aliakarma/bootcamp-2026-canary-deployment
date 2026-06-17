@@ -61,7 +61,8 @@ def simulate_server_metrics(server: Server, seed: int | None = None) -> tuple[fl
     try:
         server_num = int(server.id.split("-")[1])
     except (IndexError, ValueError):
-        server_num = hash(server.id)
+        import zlib
+        server_num = zlib.adler32(server.id.encode("utf-8"))
 
     rng_seed = server_num if seed is None else (server_num + seed)
     rng = random.Random(rng_seed)
