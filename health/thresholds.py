@@ -42,6 +42,8 @@ class HealthThresholds:
                     raise ValueError(f"Threshold '{name}' must be non-negative, got {val}")
                 if "percentage" in name or "usage" in name or "rate" in name:
                     if val > 100.0 and "latency" not in name:
-                        raise ValueError(f"Percentage/usage threshold '{name}' cannot exceed 100, got {val}")
+                        raise ValueError(
+                            f"Percentage/usage threshold '{name}' cannot exceed 100, got {val}"
+                        )
             else:
                 raise TypeError(f"Threshold '{name}' must be numeric, got {type(val)}")

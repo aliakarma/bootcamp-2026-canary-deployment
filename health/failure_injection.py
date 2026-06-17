@@ -11,8 +11,8 @@ import math
 import random
 from typing import TYPE_CHECKING
 
-from logging_config import get_logger
 from cluster.models import ServerStatus
+from logging_config import get_logger
 
 if TYPE_CHECKING:
     from cluster.state import ClusterState

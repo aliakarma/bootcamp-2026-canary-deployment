@@ -9,13 +9,13 @@ for integration with the deployment engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
-from logging_config import get_logger
 from cluster.models import ServerStatus
 from cluster.state import ClusterState
+from health.metrics import ServerHealthReport, evaluate_server_health
 from health.thresholds import HealthThresholds
-from health.metrics import evaluate_server_health, ServerHealthReport
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -36,6 +36,7 @@ class ClusterHealthReport:
         avg_cpu_usage: Average CPU usage across the cluster.
         avg_memory_usage: Average memory usage across the cluster.
         failed_checks: List of descriptions of violated thresholds.
+        regional_breakdown: Mapping of region name to detailed health stats.
     """
 
     overall_passed: bool
@@ -49,6 +50,7 @@ class ClusterHealthReport:
     avg_cpu_usage: float
     avg_memory_usage: float
     failed_checks: list[str] = field(default_factory=list)
+    regional_breakdown: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def analyze(
@@ -132,6 +134,25 @@ def analyze(
 
     overall_passed = len(failed_checks) == 0
 
+    # Group metrics by region
+    regional_servers: dict[str, list] = {}
+    for s in servers:
+        regional_servers.setdefault(s.region, []).append(s)
+
+    regional_breakdown: dict[str, dict[str, Any]] = {}
+    for r, r_servers in regional_servers.items():
+        r_total = len(r_servers)
+        r_degraded = sum(1 for s in r_servers if s.status == ServerStatus.DEGRADED)
+        r_failed = sum(1 for s in r_servers if s.status == ServerStatus.FAILED)
+        r_unhealthy = sum(1 for s in r_servers if not server_reports[s.id].passed)
+        r_unhealthy_pct = (r_unhealthy / r_total * 100.0) if r_total > 0 else 0.0
+        regional_breakdown[r] = {
+            "total_servers": r_total,
+            "degraded_count": r_degraded,
+            "failed_count": r_failed,
+            "unhealthy_percentage": round(r_unhealthy_pct, 1),
+        }
+
     return ClusterHealthReport(
         overall_passed=overall_passed,
         server_reports=server_reports,
@@ -144,6 +165,7 @@ def analyze(
         avg_cpu_usage=round(avg_cpu, 1),
         avg_memory_usage=round(avg_mem, 1),
         failed_checks=failed_checks,
+        regional_breakdown=regional_breakdown,
     )
 
 
@@ -163,6 +185,7 @@ def create_health_check_fn(
     Returns:
         Callable[[ClusterState], bool]: A deployment engine compatible health hook.
     """
+
     def health_check_fn(cluster_state: ClusterState) -> bool:
         report = analyze(cluster_state, thresholds, seed=seed)
         if report.overall_passed:
