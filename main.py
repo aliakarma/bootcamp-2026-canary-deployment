@@ -8,7 +8,14 @@ canary deployment.
 
 from logging_config import get_logger
 from cluster import generate_cluster, ClusterState, inspect_cluster
-from deploy import DeploymentEngine, DeploymentConfig
+from deploy import (
+    DeploymentEngine,
+    DeploymentConfig,
+    save_deployment_state,
+    load_deployment_state,
+    validate_rollback_consistency,
+    RollbackConsistencyError,
+)
 from health import HealthThresholds, create_health_check_fn, inject_failures
 
 logger = get_logger(__name__)
@@ -126,6 +133,64 @@ def main() -> None:
         len(failing_result.servers_updated),
         failing_result.total_servers,
         failing_result.error_message,
+    )
+
+    # ------------------------------------------------------------------
+    # Phase 5: Manual Rollback System Demonstration
+    # ------------------------------------------------------------------
+    logger.info("=" * 60)
+    logger.info("Phase 5: Running manual rollback system demonstration")
+    logger.info("=" * 60)
+
+    # 1. Store/Save deployment state of the healthy Phase 3 run
+    state_file = "logs/phase3_deployment_state.json"
+    logger.info("Saving healthy deployment state to disk: %s", state_file)
+    save_deployment_state(result, state_file)
+
+    # 2. Restore/Load the deployment state from disk
+    logger.info("Restoring deployment state from disk ...")
+    loaded_state = load_deployment_state(state_file)
+    logger.info(
+        "Successfully loaded deployment state. ID: %s, Target Version: %s, Updated Servers: %d",
+        loaded_state.deployment_id,
+        loaded_state.target_version,
+        len(loaded_state.servers_updated),
+    )
+
+    # 3. Modify a server's version manually in the cluster to simulate a configuration drift/inconsistency
+    drift_server_id = list(loaded_state.servers_updated)[0]
+    drift_server = state.get_server(drift_server_id)
+    if drift_server:
+        logger.info("Simulating configuration drift by changing %s version manually to '2.1.0'", drift_server_id)
+        # Directly modify current_version under state's lock to simulate drift
+        with state._lock:
+            drift_server.current_version = "2.1.0"
+
+    # 4. Validate rollback consistency
+    logger.info("Running consistency check on the cluster state ...")
+    inconsistencies = validate_rollback_consistency(state, loaded_state)
+    logger.warning("Inconsistencies detected: %s", inconsistencies)
+
+    # 5. Attempt consistent rollback (should fail due to drift)
+    logger.info("Attempting to run a consistent rollback (force=False) ...")
+    try:
+        engine.rollback(loaded_state, force=False)
+    except RollbackConsistencyError as exc:
+        logger.error("Rollback aborted! Consistency check failed: %s", exc)
+        logger.error("Detailed server mismatches: %s", exc.errors)
+
+    # 6. Run forced rollback (force=True) to override drift and successfully revert all updated nodes
+    logger.info("Executing forced rollback (force=True) to revert all nodes ...")
+    rolled_back_servers = engine.rollback(loaded_state, force=True)
+
+    # 7. Print final cluster state after manual rollback
+    logger.info("Final cluster state after manual rollback:")
+    inspect_cluster(state)
+
+    logger.info(
+        "Manual rollback completed: reverted %d servers back to version %s",
+        len(rolled_back_servers),
+        loaded_state.source_version,
     )
 
 
