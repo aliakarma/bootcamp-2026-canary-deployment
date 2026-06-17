@@ -44,6 +44,7 @@ if _SUPPORTS_COLOUR:
     if sys.platform == "win32":
         try:
             import ctypes
+
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
             kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
         except Exception:
@@ -54,11 +55,11 @@ class _ColourFormatter(logging.Formatter):
     """Formatter that adds ANSI colour codes based on log level."""
 
     COLOURS = {
-        logging.DEBUG:    "\033[36m",   # Cyan
-        logging.INFO:     "\033[32m",   # Green
-        logging.WARNING:  "\033[33m",   # Yellow
-        logging.ERROR:    "\033[31m",   # Red
-        logging.CRITICAL: "\033[1;31m", # Bold Red
+        logging.DEBUG: "\033[36m",  # Cyan
+        logging.INFO: "\033[32m",  # Green
+        logging.WARNING: "\033[33m",  # Yellow
+        logging.ERROR: "\033[31m",  # Red
+        logging.CRITICAL: "\033[1;31m",  # Bold Red
     }
     RESET = "\033[0m"
 
