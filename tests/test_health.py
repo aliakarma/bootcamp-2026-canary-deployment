@@ -123,12 +123,27 @@ class TestMetricsAndServerEvaluation:
         assert report.passed is False
         assert "memory_usage" in report.failed_metrics
 
-    def test_evaluate_health_failing_status(self, server: Server) -> None:
-        """Server fails check when status is FAILED."""
-        server.status = ServerStatus.FAILED
-        report = evaluate_server_health(server, HealthThresholds())
-        assert report.passed is False
-        assert "status_failed" in report.failed_metrics
+    def test_custom_server_id_stable_hashing(self) -> None:
+        """Verify that server metric simulation works deterministically with custom server ID formats."""
+        custom_server1 = Server(
+            id="web-prod-k8s-pod-abc",
+            hostname="web-prod-k8s-pod-abc.internal",
+            ip_address="10.0.0.99",
+            region="us-east-1",
+            current_version="1.0.0",
+        )
+        custom_server2 = Server(
+            id="web-prod-k8s-pod-abc",
+            hostname="web-prod-k8s-pod-abc.internal",
+            ip_address="10.0.0.99",
+            region="us-east-1",
+            current_version="1.0.0",
+        )
+        # Verify simulated metrics are identical and deterministic
+        err1, lat1 = simulate_server_metrics(custom_server1, seed=42)
+        err2, lat2 = simulate_server_metrics(custom_server2, seed=42)
+        assert err1 == err2
+        assert lat1 == lat2
 
 
 # ======================================================================

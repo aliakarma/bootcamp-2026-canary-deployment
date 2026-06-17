@@ -792,6 +792,38 @@ class TestAbortHandling:
         for server in cluster_state.servers:
             assert server.current_version == "1.0.0"
 
+    def test_abort_mid_stage_rollout(
+        self, cluster_state: ClusterState
+    ) -> None:
+        """Abort signal set mid-stage sets deployment status to ABORTED (not ROLLED_BACK)."""
+        abort_event = threading.Event()
+
+        config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[100],
+            stage_delay_seconds=0.0,
+            abort_event=abort_event,
+        )
+        engine = DeploymentEngine(cluster_state)
+
+        # Trigger abort while engine is updating nodes in stage
+        # We hook into update_server_version to set the abort event mid-way
+        original_update = cluster_state.update_server_version
+        call_count = 0
+
+        def mock_update_version(server_id: str, new_version: str) -> bool:
+            nonlocal call_count
+            if call_count == 2:
+                abort_event.set()
+            call_count += 1
+            return original_update(server_id, new_version)
+
+        cluster_state.update_server_version = mock_update_version
+        result = engine.deploy(config)
+
+        assert result.status == DeploymentStatus.ABORTED
+        assert "Abort signal received mid-stage" in result.error_message
+
 
 # ======================================================================
 # DeploymentEngine — Edge Cases
@@ -843,6 +875,26 @@ class TestEdgeCases:
         assert result.status == DeploymentStatus.COMPLETED
         assert len(result.stages) == 1
         assert len(result.stages[0].servers_updated) == 20
+
+    def test_under_provisioned_update_triggers_rollback(self) -> None:
+        """Verify that a stage fails and triggers rollback if fewer servers are updated than required."""
+        cs = ClusterState(generate_cluster(size=10, seed=42))
+        # Set 6 servers to FAILED status so they are not updatable
+        for i in range(1, 7):
+            cs.update_server_status(f"server-00{i}", ServerStatus.FAILED)
+
+        # We require updating 50% (5 servers), but only 4 are updatable (healthy)
+        config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[50, 100],
+            stage_delay_seconds=0.0,
+        )
+        engine = DeploymentEngine(cs)
+        result = engine.deploy(config)
+
+        # Rollout should fail with ROLLED_BACK state due to under-provisioned update
+        assert result.status == DeploymentStatus.ROLLED_BACK
+        assert "Under-provisioned update" in result.error_message
 
     def test_deployment_state_serialisation_roundtrip(self) -> None:
         """DeploymentState.to_dict() produces valid JSON-serialisable data."""
