@@ -12,8 +12,8 @@ from collections import OrderedDict
 from datetime import datetime
 from typing import Any
 
-from logging_config import get_logger
 from cluster.models import Server, ServerStatus
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -187,12 +187,14 @@ class ClusterState:
             server.status = ServerStatus.UPDATING
             server.last_health_check = datetime.now()
 
-            server.deployment_history.append({
-                "version": new_version,
-                "previous_version": old_version,
-                "timestamp": datetime.now().isoformat(),
-                "action": "deploy",
-            })
+            server.deployment_history.append(
+                {
+                    "version": new_version,
+                    "previous_version": old_version,
+                    "timestamp": datetime.now().isoformat(),
+                    "action": "deploy",
+                }
+            )
 
             logger.info(
                 "Server %s version: %s → %s",
@@ -227,18 +229,27 @@ class ClusterState:
                 )
                 return False
 
+            if (
+                server.deployment_history
+                and server.deployment_history[-1].get("action") == "rollback"
+            ):
+                logger.debug("Server %s is already rolled back (idempotent no-op)", server_id)
+                return True
+
             rolled_back_from = server.current_version
             server.current_version = server.previous_version
             server.previous_version = rolled_back_from
             server.status = ServerStatus.HEALTHY
             server.last_health_check = datetime.now()
 
-            server.deployment_history.append({
-                "version": server.current_version,
-                "previous_version": rolled_back_from,
-                "timestamp": datetime.now().isoformat(),
-                "action": "rollback",
-            })
+            server.deployment_history.append(
+                {
+                    "version": server.current_version,
+                    "previous_version": rolled_back_from,
+                    "timestamp": datetime.now().isoformat(),
+                    "action": "rollback",
+                }
+            )
 
             logger.info(
                 "Server %s rolled back: %s → %s",

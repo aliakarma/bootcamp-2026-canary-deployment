@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import sys
 
-from logging_config import get_logger
 from cluster.models import ServerStatus
 from cluster.state import ClusterState
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -23,6 +23,7 @@ _SUPPORTS_COLOUR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 if _SUPPORTS_COLOUR and sys.platform == "win32":
     try:
         import ctypes
+
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
     except Exception:
@@ -119,7 +120,9 @@ def inspect_cluster(state: ClusterState, *, verbose: bool = False) -> str:
     add(f"{_ML}{_H * _WIDTH}{_MR}")
 
     # ── Version Distribution ────────────────────────────────────────
-    add(f"{_V}  {_c(_BOLD, 'Version Distribution'):<{_WIDTH - 2 + _len_ansi_offset(_c(_BOLD, 'Version Distribution'))}}{_V}")
+    add(
+        f"{_V}  {_c(_BOLD, 'Version Distribution'):<{_WIDTH - 2 + _len_ansi_offset(_c(_BOLD, 'Version Distribution'))}}{_V}"
+    )
 
     for version, count in sorted(summary["versions"].items()):
         frac = count / total if total > 0 else 0
@@ -131,7 +134,9 @@ def inspect_cluster(state: ClusterState, *, verbose: bool = False) -> str:
     add(f"{_ML}{_H * _WIDTH}{_MR}")
 
     # ── Region Breakdown ────────────────────────────────────────────
-    add(f"{_V}  {_c(_BOLD, 'Region Breakdown'):<{_WIDTH - 2 + _len_ansi_offset(_c(_BOLD, 'Region Breakdown'))}}{_V}")
+    add(
+        f"{_V}  {_c(_BOLD, 'Region Breakdown'):<{_WIDTH - 2 + _len_ansi_offset(_c(_BOLD, 'Region Breakdown'))}}{_V}"
+    )
 
     regions: dict[str, int] = {}
     for s in servers:
@@ -178,5 +183,6 @@ def _len_ansi_offset(text: str) -> int:
     counts escape codes as visible characters.
     """
     import re
+
     ansi_codes = re.findall(r"\033\[[0-9;]*m", text)
     return sum(len(code) for code in ansi_codes)

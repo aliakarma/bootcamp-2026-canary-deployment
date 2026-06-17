@@ -10,8 +10,8 @@ from __future__ import annotations
 import random
 from datetime import datetime
 
-from logging_config import get_logger
 from cluster.models import Server, ServerStatus
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -31,9 +31,9 @@ REGIONS: list[str] = [
 
 # Mapping from region to hostname subdomain
 _REGION_SUBDOMAINS: dict[str, str] = {
-    "us-east-1":      "use1",
-    "us-west-2":      "usw2",
-    "eu-west-1":      "euw1",
+    "us-east-1": "use1",
+    "us-west-2": "usw2",
+    "eu-west-1": "euw1",
     "ap-southeast-1": "apse1",
 }
 
