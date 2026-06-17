@@ -91,6 +91,16 @@ class TestRollbackSystem:
             assert restored.deployment_id == completed_deployment.deployment_id
             assert restored.servers_updated == completed_deployment.servers_updated
 
+    def test_save_state_creates_directories(self, completed_deployment: DeploymentState) -> None:
+        """Verify that save_deployment_state creates nested directories if they do not exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = os.path.join(tmpdir, "nested_dir", "deep_dir", "state.json")
+            save_deployment_state(completed_deployment, filepath)
+            assert os.path.exists(filepath)
+
+            restored = load_deployment_state(filepath)
+            assert restored.deployment_id == completed_deployment.deployment_id
+
     # ------------------------------------------------------------------
     # Consistency Validation
     # ------------------------------------------------------------------
