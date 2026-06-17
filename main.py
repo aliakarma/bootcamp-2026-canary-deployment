@@ -8,20 +8,35 @@ canary deployment with active health analysis and abort listener support.
 
 from __future__ import annotations
 
+import datetime
 import threading
-from logging_config import get_logger
-from cluster import generate_cluster, ClusterState, inspect_cluster
+from typing import Any
+
+from cluster import ClusterState, generate_cluster, inspect_cluster
+from cluster.models import ServerStatus
 from deploy import (
-    DeploymentEngine,
-    DeploymentConfig,
-    save_deployment_state,
-    load_deployment_state,
-    validate_rollback_consistency,
-    RollbackConsistencyError,
-    ConsoleAbortListener,
     AuditLogger,
+    ConsoleAbortListener,
+    DeploymentConfig,
+    DeploymentEngine,
+    RollbackConsistencyError,
+    load_deployment_state,
+    save_deployment_state,
+    validate_rollback_consistency,
+)
+from deploy.state import DeploymentState
+from governance import (
+    AbortPolicy,
+    ApprovalGate,
+    ApprovalPolicy,
+    GovernanceCoordinator,
+    HealthPolicy,
+    PolicyEvaluationResult,
+    RiskPolicy,
+    RollbackPolicy,
 )
 from health import HealthThresholds, create_health_check_fn, inject_failures
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -34,6 +49,7 @@ def main() -> None:
 
     # Initialize structured event audit logger exporting to logs/audit_trail.jsonl
     import os
+
     audit_file = "logs/audit_trail.jsonl"
     if os.path.exists(audit_file):
         try:
@@ -76,10 +92,11 @@ def main() -> None:
         config = DeploymentConfig(
             target_version="2.0.0",
             stages=[10, 25, 50, 75, 100],
-            stage_delay_seconds=1.0,   # Shortened for demo
+            stage_delay_seconds=1.0,  # Shortened for demo
             health_check_fn=health_check,
             abort_event=abort_event,
             audit_logger=audit_logger,
+            governance_coordinator=GovernanceCoordinator(),
         )
 
         engine = DeploymentEngine(state)
@@ -125,7 +142,9 @@ def main() -> None:
             nonlocal call_count
             # Inject failures right after Stage 1 completes (25% progress)
             if call_count == 1:
-                logger.warning("!!! CHAOS INJECTION: Spiking latency & degrading target-version servers !!!")
+                logger.warning(
+                    "!!! CHAOS INJECTION: Spiking latency & degrading target-version servers !!!"
+                )
                 inject_failures(
                     cs,
                     target_version="2.0.0",
@@ -195,7 +214,10 @@ def main() -> None:
         drift_server_id = list(loaded_state.servers_updated)[0]
         drift_server = state.get_server(drift_server_id)
         if drift_server:
-            logger.info("Simulating configuration drift by changing %s version manually to '2.1.0'", drift_server_id)
+            logger.info(
+                "Simulating configuration drift by changing %s version manually to '2.1.0'",
+                drift_server_id,
+            )
             # Directly modify current_version under state's lock to simulate drift
             with state._lock:
                 drift_server.current_version = "2.1.0"
@@ -228,15 +250,260 @@ def main() -> None:
         )
 
         # ------------------------------------------------------------------
+        # Phase 8: Governance Policy Engine Demonstration
+        # ------------------------------------------------------------------
+        logger.info("=" * 60)
+        logger.info("Phase 8: Governance Policy Engine & Advanced Operational Control")
+        logger.info("=" * 60)
+
+        # ------------------------------------------------------------------
+        # Scenario 8a: Weekend Deployment Block
+        # ------------------------------------------------------------------
+        logger.info("Scenario 8a: Weekend Deployment Block (Restricted Window)")
+
+        class WeekendRiskPolicy(RiskPolicy):
+            def evaluate(
+                self,
+                cluster_state: ClusterState,
+                deployment_state: DeploymentState,
+                context: dict[str, Any],
+            ) -> PolicyEvaluationResult:
+                # Force Sunday afternoon
+                context["current_time"] = datetime.datetime(2026, 6, 21, 15, 0)
+                return super().evaluate(cluster_state, deployment_state, context)
+
+        coordinator_weekend = GovernanceCoordinator(
+            policies=[
+                RollbackPolicy(),
+                HealthPolicy(),
+                ApprovalPolicy(),
+                AbortPolicy(),
+                WeekendRiskPolicy(),
+            ]
+        )
+
+        weekend_config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[10, 50, 100],
+            stage_delay_seconds=0.1,
+            health_check_fn=create_health_check_fn(HealthThresholds()),
+            governance_coordinator=coordinator_weekend,
+            audit_logger=audit_logger,
+        )
+
+        weekend_cluster = ClusterState(generate_cluster(size=10, seed=42))
+        weekend_engine = DeploymentEngine(weekend_cluster)
+        weekend_result = weekend_engine.deploy(weekend_config)
+
+        logger.info(
+            "Weekend deployment status: %s (Expected: FAILED)",
+            weekend_result.status.value,
+        )
+        logger.info("Weekend deployment error message: %s", weekend_result.error_message)
+
+        # ------------------------------------------------------------------
+        # Scenario 8b: Human Approval Denied Gatekeeper Block
+        # ------------------------------------------------------------------
+        logger.info("-" * 50)
+        logger.info("Scenario 8b: Manual Approval Denied Gatekeeper Block")
+
+        # Approval gate callback that always denies (simulating operator rejects the prompt/gate)
+        approval_gate_deny = ApprovalGate(callback=lambda req: False)
+
+        coordinator_deny = GovernanceCoordinator(approval_gate=approval_gate_deny)
+
+        # Deployment stages hitting 100% (progress >= 75%) which triggers approval
+        deny_config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[50, 100],
+            stage_delay_seconds=0.1,
+            health_check_fn=create_health_check_fn(HealthThresholds()),
+            governance_coordinator=coordinator_deny,
+            audit_logger=audit_logger,
+        )
+
+        deny_cluster = ClusterState(generate_cluster(size=10, seed=42))
+        deny_engine = DeploymentEngine(deny_cluster)
+        deny_result = deny_engine.deploy(deny_config)
+
+        logger.info(
+            "Denied approval deployment status: %s (Expected: FAILED)",
+            deny_result.status.value,
+        )
+        logger.info("Denied approval deployment error: %s", deny_result.error_message)
+        logger.info(
+            "Partially updated servers running 2.0.0: %d",
+            len([s for s in deny_cluster.servers if s.current_version == "2.0.0"]),
+        )
+
+        # ------------------------------------------------------------------
+        # Scenario 8c: Critical Risk Rollback Suspension (Auto-rollback Suspended)
+        # ------------------------------------------------------------------
+        logger.info("-" * 50)
+        logger.info("Scenario 8c: CRITICAL Risk Rollback Suspension Block")
+
+        suspension_cluster = ClusterState(generate_cluster(size=10, seed=42))
+
+        def failing_risk_spike_hook(cs: ClusterState) -> bool:
+            logger.warning("Spiking cluster errors to trigger CRITICAL risk classification...")
+            servers = cs.servers
+            cs.update_server_status(servers[0].id, ServerStatus.DEGRADED)
+            cs.update_server_status(servers[1].id, ServerStatus.FAILED)
+            cs.update_server_status(servers[2].id, ServerStatus.FAILED)
+            cs.update_server_status(servers[3].id, ServerStatus.FAILED)
+            cs.update_server_status(servers[4].id, ServerStatus.FAILED)
+            return False
+
+        coordinator_suspend = GovernanceCoordinator()
+
+        suspend_config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[50, 100],
+            stage_delay_seconds=0.1,
+            health_check_interval=0.1,
+            health_check_fn=failing_risk_spike_hook,
+            max_retries_per_stage=0,
+            governance_coordinator=coordinator_suspend,
+            audit_logger=audit_logger,
+        )
+
+        suspend_engine = DeploymentEngine(suspension_cluster)
+        suspend_result = suspend_engine.deploy(suspend_config)
+
+        logger.info(
+            "Rollback-suspended deployment status: %s (Expected: FAILED)",
+            suspend_result.status.value,
+        )
+        logger.info("Rollback-suspended error message: %s", suspend_result.error_message)
+        logger.info(
+            "Servers currently running 2.0.0: %d (Expected > 0, rollback was prevented)",
+            len([s for s in suspension_cluster.servers if s.current_version == "2.0.0"]),
+        )
+
+        # ------------------------------------------------------------------
+        # Phase 9: Operational Resilience, Failure Recovery & Observability
+        # ------------------------------------------------------------------
+        logger.info("=" * 60)
+        logger.info("Phase 9: Operational Resilience, Failure Recovery & Observability")
+        logger.info("=" * 60)
+
+        # 1. Snapshot Creation and Restoration Demonstration
+        logger.info("Scenario 9a: Point-in-time Snapshot and safe restoration")
+        from resilience.snapshots import ClusterSnapshotSystem
+
+        snapshot_cluster = ClusterSnapshotSystem(state)
+
+        # Capture current state of the healthy cluster
+        pre_fail_snapshot = snapshot_cluster.create_snapshot(
+            result, metadata={"note": "Pre-chaos snapshot"}
+        )
+        logger.info("Created pre-chaos cluster snapshot: %s", pre_fail_snapshot.snapshot_id)
+
+        # Simulate cluster failure (degrade a server manually)
+        servers_list = state.servers
+        state.update_server_status(servers_list[0].id, ServerStatus.FAILED)
+        logger.warning("Simulated failure: Server %s is now FAILED", servers_list[0].id)
+
+        # Restore snapshot to recover state
+        logger.info("Restoring cluster to pre-chaos snapshot...")
+        restored = snapshot_cluster.restore_snapshot(pre_fail_snapshot)
+        logger.info("Snapshot restoration result: %s (Expected: True)", restored)
+        logger.info(
+            "Server %s status recovered: %s (Expected: healthy)",
+            servers_list[0].id,
+            state.get_server(servers_list[0].id).status.value,  # type: ignore[union-attr]
+        )
+
+        # 2. Region Quarantine Demonstration
+        logger.info("-" * 50)
+        logger.info("Scenario 9b: Region Quarantine under cascading failure")
+        from resilience.quarantine import RegionQuarantineSystem
+
+        quarantine_sys = RegionQuarantineSystem(state)
+
+        # Force failures on all us-east-1 servers to trigger auto-quarantine threshold (e.g. >30% degraded)
+        us_east_nodes = [s for s in state.servers if s.region == "us-east-1"]
+        for node in us_east_nodes:
+            state.update_server_status(node.id, ServerStatus.FAILED)
+
+        quarantined = quarantine_sys.check_and_auto_quarantine(threshold_percentage=30.0)
+        logger.warning("Regions auto-quarantined: %s (Expected: ['us-east-1'])", quarantined)
+
+        # 3. Quarantine-aware deployment routing
+        logger.info("-" * 50)
+        logger.info("Scenario 9c: Quarantine-aware rollout routing")
+        routing_config = DeploymentConfig(
+            target_version="2.1.0",
+            stages=[50, 100],
+            stage_delay_seconds=0.1,
+            quarantine_system=quarantine_sys,
+            audit_logger=audit_logger,
+        )
+        routing_engine = DeploymentEngine(state)
+        routing_result = routing_engine.deploy(routing_config)
+        logger.info("Rollout routing completed. Status: %s", routing_result.status.value)
+        # Check that none of the updated servers are in the quarantined region
+        quarantined_updated = [
+            s_id
+            for s_id in routing_result.servers_updated
+            if state.get_server(s_id).region == "us-east-1"  # type: ignore[union-attr]
+        ]
+        logger.info(
+            "Number of updated servers in quarantined us-east-1: %d (Expected: 0)",
+            len(quarantined_updated),
+        )
+
+        # 4. Event Replay and Causality Graph
+        logger.info("-" * 50)
+        logger.info("Scenario 9d: Event Replay causality graph & timeline reconstruction")
+        from resilience.replay import EventReplayEngine
+
+        replay_engine = EventReplayEngine()
+        loaded_events = replay_engine.load_audit_trail(audit_file)
+
+        is_lineage_valid, lineage_errors = replay_engine.verify_event_lineage(loaded_events)
+        logger.info(
+            "Audit lineage verification: %s",
+            "VALID" if is_lineage_valid else f"INVALID: {lineage_errors}",
+        )
+
+        timeline = replay_engine.reconstruct_timeline(loaded_events)
+        logger.info("Timeline reconstructed. Total replayed events: %d", len(timeline))
+
+        # Verify state reconstruction at the last event
+        last_evt_id = timeline[-1]["event_id"]
+        reconstructed_state = replay_engine.reconstruct_state_at_step(loaded_events, last_evt_id)
+        logger.info(
+            "Reconstructed deployment status at last step: %s",
+            reconstructed_state["deployment_status"],
+        )
+
+        # 5. Observability Metrics
+        logger.info("-" * 50)
+        logger.info("Scenario 9e: Operational Observability Layer Metrics Aggregation")
+        from resilience.observability import OperationalObservabilityLayer
+
+        observability_layer = OperationalObservabilityLayer()
+        aggregated_metrics = observability_layer.aggregate_metrics(loaded_events)
+        logger.info("Aggregated Observability Metrics:")
+        logger.info("  Total deployments: %d", aggregated_metrics["total_deployments"])
+        logger.info("  Completed deployments: %d", aggregated_metrics["completions"])
+        logger.info("  Total failures/aborts: %d", aggregated_metrics["failures"])
+        logger.info("  Rollback frequency ratio: %.2f", aggregated_metrics["rollback_ratio"])
+
+        # ------------------------------------------------------------------
         # Phase 7: Structured Event Log Summary Demonstration
         # ------------------------------------------------------------------
         logger.info("=" * 60)
         logger.info("Phase 7: Structured Event Audit Log Summary")
         logger.info("=" * 60)
-        logger.info("Total structured events recorded in memory: %d", len(audit_logger.get_events()))
+        logger.info(
+            "Total structured events recorded in memory: %d", len(audit_logger.get_events())
+        )
         logger.info("Persistent audit file saved to: %s", audit_file)
         logger.info("Sample serialized events (first 5 events):")
         import json
+
         for idx, ev in enumerate(audit_logger.get_events()[:5]):
             logger.info("  Event %d:\n%s", idx + 1, json.dumps(ev.to_dict(), indent=2))
 
