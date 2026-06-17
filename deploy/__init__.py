@@ -10,6 +10,12 @@ Re-exports the key public symbols::
 from deploy.config import DeploymentConfig
 from deploy.state import DeploymentState, DeploymentStatus, StageResult
 from deploy.engine import DeploymentEngine
+from deploy.rollback import (
+    save_deployment_state,
+    load_deployment_state,
+    validate_rollback_consistency,
+    RollbackConsistencyError,
+)
 
 __all__ = [
     "DeploymentConfig",
@@ -17,4 +23,8 @@ __all__ = [
     "DeploymentState",
     "DeploymentStatus",
     "StageResult",
+    "save_deployment_state",
+    "load_deployment_state",
+    "validate_rollback_consistency",
+    "RollbackConsistencyError",
 ]

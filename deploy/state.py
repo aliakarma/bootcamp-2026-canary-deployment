@@ -192,6 +192,8 @@ class DeploymentState:
             "total_servers": self.total_servers,
             "servers_updated_count": len(self.servers_updated),
             "servers_pending_count": len(self.servers_pending),
+            "servers_updated": list(self.servers_updated),
+            "servers_pending": list(self.servers_pending),
             "progress_percentage": round(self.progress_percentage, 1),
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,

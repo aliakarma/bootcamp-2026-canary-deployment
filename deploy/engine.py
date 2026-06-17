@@ -62,6 +62,21 @@ class DeploymentEngine:
         recent) deployment, or ``None`` if no deployment has been run."""
         return self._current_deployment
 
+    def rollback(self, deployment: DeploymentState, force: bool = False) -> list[str]:
+        """Execute a rollback on a previously run deployment.
+
+        Validates cluster consistency before executing.
+
+        Args:
+            deployment: The DeploymentState representing the rollout to revert.
+            force: If True, bypass consistency checks and revert matching nodes anyway.
+
+        Returns:
+            List of successfully rolled back server IDs.
+        """
+        from deploy.rollback import rollback as run_rollback
+        return run_rollback(self._cluster, deployment, force=force)
+
     def deploy(self, config: DeploymentConfig) -> DeploymentState:
         """Execute a full canary deployment.
 
@@ -112,14 +127,20 @@ class DeploymentEngine:
                 deployment.stages.append(stage_result)
 
                 if stage_result.error:
-                    # Stage failed — attempt rollback
+                    # Stage failed — check if due to abort
                     logger.error(
                         "Stage %d FAILED: %s", stage_idx, stage_result.error
                     )
-                    self._handle_rollback(
-                        deployment,
-                        f"Stage {stage_idx} failed: {stage_result.error}",
-                    )
+                    if self._is_aborted(config):
+                        self._handle_abort(
+                            deployment,
+                            f"Abort signal received mid-stage: {stage_result.error}",
+                        )
+                    else:
+                        self._handle_rollback(
+                            deployment,
+                            f"Stage {stage_idx} failed: {stage_result.error}",
+                        )
                     return deployment
 
                 # ----------------------------------------------------------
@@ -301,6 +322,14 @@ class DeploymentEngine:
                 logger.warning(
                     "  Failed to update server %s — skipping", server_id
                 )
+
+        # Check if the required number of servers was successfully updated
+        # (Only flag as error if we weren't aborted mid-stage)
+        if not stage.error and len(stage.servers_updated) < servers_needed:
+            stage.error = (
+                f"Under-provisioned update: target required updating {servers_needed} servers, "
+                f"but only {len(stage.servers_updated)} were successfully updated."
+            )
 
         stage.completed_at = datetime.now()
         stage.duration_seconds = (
