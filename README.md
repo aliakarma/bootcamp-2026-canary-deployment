@@ -78,7 +78,7 @@ stateDiagram-v2
 │       (GovernanceCoordinator)             │ │  analyzer.py    │ │     (ClusterState)      │
 ├───────────────────────────────────────────┤ │  (Health checks)│ ├─────────────────────────┤
 │  • policies.py (Rule checks)              │ └─────────────────┘ │  • models.py            │
-│  • approvals.py (Approval Gates)           │                     │    (Servers & metadata) │
+│  • approvals.py (Approval Gates)          │                     │    (Servers & metadata) │
 │  • risk.py (Risk Scoring Engine)          │                     └─────────────────────────┘
 └─────────────────────┬─────────────────────┘
                       ▼
