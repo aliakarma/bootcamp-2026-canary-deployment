@@ -28,13 +28,19 @@ build/
 
 # Log output
 logs/*.log
+logs/*.jsonl
+logs/*.json
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# pytest
+# QA tooling
 .pytest_cache/
 htmlcov/
 .coverage
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
 Plan.md
