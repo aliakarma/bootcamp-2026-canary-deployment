@@ -639,8 +639,8 @@ class DeploymentEngine:
         )
         deployment.mark_aborted(reason)
         self._record_event(
-            DeploymentEventType.DEPLOYMENT_FAILED,
-            {"error": f"Aborted: {reason}", "stage_index": deployment.current_stage_index},
+            DeploymentEventType.ROLLBACK_INITIATED,
+            {"reason": f"Aborted: {reason}", "stage_index": deployment.current_stage_index},
         )
         self._rollback_updated_servers(deployment)
 
@@ -654,8 +654,8 @@ class DeploymentEngine:
         deployment.mark_rolling_back()
         deployment.error_message = reason
         self._record_event(
-            DeploymentEventType.DEPLOYMENT_FAILED,
-            {"error": reason, "stage_index": deployment.current_stage_index},
+            DeploymentEventType.ROLLBACK_INITIATED,
+            {"reason": reason, "stage_index": deployment.current_stage_index},
         )
         self._rollback_updated_servers(deployment)
         deployment.mark_rolled_back()

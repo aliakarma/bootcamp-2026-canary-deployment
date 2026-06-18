@@ -28,6 +28,7 @@ class DeploymentEventType(str, Enum):
     HEALTH_CHECK = "health_check"
     ROLLBACK_START = "rollback_start"
     ROLLBACK_COMPLETE = "rollback_complete"
+    ROLLBACK_INITIATED = "rollback_initiated"
     ABORT_RECEIVED = "abort_received"
     DEPLOYMENT_COMPLETED = "deployment_completed"
     DEPLOYMENT_FAILED = "deployment_failed"
@@ -107,15 +108,16 @@ class AuditLogger:
     def log(self, event: DeploymentEvent) -> None:
         """Record a deployment event. Concurrency-safe and exception-safe.
 
+        Acquires a single lock for both in-memory append and file write
+        to guarantee ordering consistency between memory and disk under
+        concurrent logging pressure.
+
         Args:
             event: The DeploymentEvent to log.
         """
         with self._lock:
             self._events.append(event)
-
-        if self.file_path:
-            # Concurrency-safe file write
-            with self._lock:
+            if self.file_path:
                 try:
                     dirname = os.path.dirname(self.file_path)
                     if dirname:
