@@ -152,6 +152,9 @@ class EventReplayEngine:
             elif evt_type == "deployment_completed":
                 deployment_status = "completed"
 
+            elif evt_type == "rollback_initiated":
+                deployment_status = "rolling_back"
+
             elif evt_type == "deployment_failed":
                 deployment_status = "failed"
 

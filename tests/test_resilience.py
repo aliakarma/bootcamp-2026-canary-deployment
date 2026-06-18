@@ -306,21 +306,21 @@ class TestResilienceEngine:
             {"event_id": "evt-3", "event_type": "deployment_start", "deployment_id": "dep-2"},
             {
                 "event_id": "evt-4",
-                "event_type": "rollback_start",
+                "event_type": "rollback_initiated",
                 "deployment_id": "dep-2",
                 "details": {"reason": "health check failed at stage 0 (ap-southeast-1)"},
             },
             {
                 "event_id": "evt-5",
-                "event_type": "rollback_complete",
+                "event_type": "rollback_start",
                 "deployment_id": "dep-2",
-                "details": {"servers_rolled_back": ["server-001"]},
+                "details": {"reason": "health check failed at stage 0 (ap-southeast-1)"},
             },
             {
                 "event_id": "evt-6",
-                "event_type": "deployment_failed",
+                "event_type": "rollback_complete",
                 "deployment_id": "dep-2",
-                "details": {"error": "health failure in region ap-southeast-1"},
+                "details": {"servers_rolled_back": ["server-001"]},
             },
         ]
 
@@ -329,8 +329,117 @@ class TestResilienceEngine:
 
         assert metrics["total_deployments"] == 2
         assert metrics["completions"] == 1
-        assert metrics["failures"] == 1
+        assert metrics["failures"] == 0  # rollback_initiated is NOT a failure
+        assert metrics["rollbacks_initiated"] == 1
         assert metrics["rollbacks_completed"] == 1
         assert metrics["rollback_ratio"] == 0.5
         assert metrics["average_completed_duration_seconds"] == 15.0
-        assert metrics["failure_by_region"]["ap-southeast-1"] == 2
+
+    def test_observability_distinguishes_failed_vs_rollback(self) -> None:
+        """Verify that rollback recoveries do NOT inflate the failure counter.
+
+        deployment_failed should ONLY be counted for true unrecoverable failures.
+        rollback_initiated should be tracked separately.
+        """
+        events = [
+            # Deployment 1: successful rollback recovery (NOT a failure)
+            {"event_id": "e1", "event_type": "deployment_start", "deployment_id": "dep-1"},
+            {
+                "event_id": "e2",
+                "event_type": "rollback_initiated",
+                "deployment_id": "dep-1",
+                "details": {"reason": "Health check failed"},
+            },
+            {
+                "event_id": "e3",
+                "event_type": "rollback_start",
+                "deployment_id": "dep-1",
+                "details": {},
+            },
+            {
+                "event_id": "e4",
+                "event_type": "rollback_complete",
+                "deployment_id": "dep-1",
+                "details": {"servers_rolled_back": ["s1"]},
+            },
+            # Deployment 2: true unrecoverable failure
+            {"event_id": "e5", "event_type": "deployment_start", "deployment_id": "dep-2"},
+            {
+                "event_id": "e6",
+                "event_type": "deployment_failed",
+                "deployment_id": "dep-2",
+                "details": {"error": "Unexpected error: crash"},
+            },
+            # Deployment 3: successful
+            {"event_id": "e7", "event_type": "deployment_start", "deployment_id": "dep-3"},
+            {
+                "event_id": "e8",
+                "event_type": "deployment_completed",
+                "deployment_id": "dep-3",
+                "details": {"duration_seconds": 5.0},
+            },
+        ]
+
+        obs = OperationalObservabilityLayer()
+        metrics = obs.aggregate_metrics(events)
+
+        assert metrics["total_deployments"] == 3
+        assert metrics["completions"] == 1
+        assert metrics["failures"] == 1  # Only dep-2 is a hard failure
+        assert metrics["rollbacks_initiated"] == 1  # dep-1 rolled back (recovery, not failure)
+        assert metrics["rollbacks_completed"] == 1
+
+    # ------------------------------------------------------------------
+    # 7. Replay Rollback Initiated State Reconstruction
+    # ------------------------------------------------------------------
+
+    def test_replay_rollback_initiated_state_reconstruction(self) -> None:
+        """Verify rollback_initiated sets deployment_status to 'rolling_back' during replay."""
+        events = [
+            {
+                "event_id": "evt-1",
+                "timestamp": "2026-06-17T12:00:00Z",
+                "event_type": "deployment_start",
+                "deployment_id": "dep-1",
+                "details": {"target_version": "2.0.0", "source_version": "1.0.0"},
+            },
+            {
+                "event_id": "evt-2",
+                "parent_event_id": "evt-1",
+                "timestamp": "2026-06-17T12:01:00Z",
+                "event_type": "stage_transition",
+                "deployment_id": "dep-1",
+                "details": {"stage_index": 0, "servers_updated": ["server-001"]},
+            },
+            {
+                "event_id": "evt-3",
+                "parent_event_id": "evt-2",
+                "timestamp": "2026-06-17T12:02:00Z",
+                "event_type": "rollback_initiated",
+                "deployment_id": "dep-1",
+                "details": {"reason": "Health check failed at stage 0"},
+            },
+            {
+                "event_id": "evt-4",
+                "parent_event_id": "evt-3",
+                "timestamp": "2026-06-17T12:03:00Z",
+                "event_type": "rollback_complete",
+                "deployment_id": "dep-1",
+                "details": {"servers_rolled_back": ["server-001"]},
+            },
+        ]
+
+        replay = EventReplayEngine()
+
+        # At rollback_initiated, status should be "rolling_back"
+        state_at_ri = replay.reconstruct_state_at_step(events, "evt-3")
+        assert state_at_ri["deployment_status"] == "rolling_back"
+
+        # At rollback_complete, status should be "rolled_back"
+        state_at_rc = replay.reconstruct_state_at_step(events, "evt-4")
+        assert state_at_rc["deployment_status"] == "rolled_back"
+
+        # Verify lineage is valid
+        is_valid, errors = replay.verify_event_lineage(events)
+        assert is_valid is True
+        assert len(errors) == 0

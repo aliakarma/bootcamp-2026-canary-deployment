@@ -3,7 +3,7 @@
 [![Python CI](https://github.com/aliakarma/bootcamp-2026-canary-deployment/actions/workflows/ci.yml/badge.svg)](https://github.com/aliakarma/bootcamp-2026-canary-deployment/actions/workflows/ci.yml)
 [![Code Quality](https://github.com/aliakarma/bootcamp-2026-canary-deployment/actions/workflows/quality.yml/badge.svg)](https://github.com/aliakarma/bootcamp-2026-canary-deployment/actions/workflows/quality.yml)
 [![Release Validation](https://github.com/aliakarma/bootcamp-2026-canary-deployment/actions/workflows/release_validation.yml/badge.svg)](https://github.com/aliakarma/bootcamp-2026-canary-deployment/actions/workflows/release_validation.yml)
-[![Code Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen)](#)
+[![Code Coverage](https://codecov.io/gh/aliakarma/bootcamp-2026-canary-deployment/branch/main/graph/badge.svg)](https://codecov.io/gh/aliakarma/bootcamp-2026-canary-deployment)
 
 A governance-aware, resilience-oriented autonomous deployment coordination simulator with operational auditability, rollback governance, deterministic replay, and reliability-aware orchestration.
 
@@ -36,8 +36,8 @@ stateDiagram-v2
     PENDING --> RUNNING : start_deployment
     RUNNING --> COMPLETED : all_stages_succeed
     RUNNING --> ABORTED : abort_signalled
-    RUNNING --> FAILED : health_check_fail / under_provisioned / policy_block
-    RUNNING --> ROLLING_BACK : error / failed_check / abort
+    RUNNING --> FAILED : unrecoverable_error / policy_block
+    RUNNING --> ROLLING_BACK : rollback_initiated (health_fail / abort / error)
     ROLLING_BACK --> ROLLED_BACK : rollback_complete
     ROLLING_BACK --> FAILED : rollback_error / policy_block
     FAILED --> [*]
@@ -50,8 +50,8 @@ stateDiagram-v2
 
 * **PENDING → RUNNING**: Triggered when `deploy()` is invoked and the deployment passes the initial `evaluate_start` governance checks.
 * **RUNNING → COMPLETED**: Triggered when all stage updates succeed and pass all post-stage health check thresholds.
-* **RUNNING → ABORTED**: Triggered when the console abort listener intercepts an `abort` command during an inter-stage delay, causing a graceful termination.
-* **RUNNING → ROLLING_BACK**: Triggered by a failed stage update, failed health check, or an abort signal. Initiates node reversion.
+* **RUNNING → FAILED**: Triggered ONLY by unrecoverable exceptions or governance policy blocks. Rollback recovery flows do NOT produce this transition.
+* **RUNNING → ROLLING_BACK**: Triggered by a `ROLLBACK_INITIATED` event from a failed stage update, failed health check, or abort signal. Initiates node reversion.
 * **ROLLING_BACK → ROLLED_BACK**: Successfully completes the restoration of all target-version nodes back to the source version.
 * **ROLLING_BACK → FAILED**: Occurs if a governance policy blocks the automatic rollback (e.g. `RollbackPolicy` due to `CRITICAL` risk), leaving the nodes in a partial state.
 
@@ -133,11 +133,11 @@ sequenceDiagram
     DE->>CS: update_server_version()
     DE->>HA: analyze(cluster_state)
     HA-->>DE: Health check FAILED
-    DE->>DE: Record event (deployment_failed)
+    DE->>DE: Record event (rollback_initiated)
     DE->>DE: Record event (rollback_start)
     DE->>CS: rollback_server(updated_nodes)
     DE->>DE: Record event (rollback_complete)
-    DE-->>Operator: Return FAILED (rolled back)
+    DE-->>Operator: Return ROLLED_BACK
 ```
 
 ### C. Governance-Blocked Deployment
@@ -193,6 +193,7 @@ sequenceDiagram
     AL->>DE: Signals abort_event
     Note over DE: Wakes up from stage delay wait
     DE->>DE: Record event (abort_received)
+    DE->>DE: Record event (rollback_initiated)
     DE->>DE: Record event (rollback_start)
     DE->>CS: rollback_server(updated_nodes)
     DE->>DE: Record event (rollback_complete)
@@ -212,7 +213,9 @@ The system ensures strict thread safety under concurrent operations:
 3. **Idempotent Rollback Safety**:
    - `rollback_server` checks the last action in the server's deployment history. If it is already a `"rollback"`, the function returns `True` immediately. This prevents race conditions and double-flipping when multiple threads trigger rollbacks concurrently.
 4. **Thread-safe Audit Logging**:
-   - `AuditLogger` synchronizes in-memory appends and file writes using an internal lock, preventing line interleaving when multiple threads log concurrently.
+   - `AuditLogger` synchronizes in-memory appends and file writes atomically under a **single lock acquisition**, guaranteeing that in-memory ordering is always consistent with on-disk JSONL ordering. This eliminates the TOCTOU ordering gap where concurrent threads could previously interleave between the append and file-write operations.
+5. **Rollback Event Semantics**:
+   - Rollback initiation emits `ROLLBACK_INITIATED` (not `DEPLOYMENT_FAILED`). This cleanly separates recoverable rollback flows from true unrecoverable failures, preventing corruption of observability metrics. `DEPLOYMENT_FAILED` is reserved exclusively for unexpected exceptions and unrecoverable error paths.
 
 ---
 
@@ -231,7 +234,8 @@ Phase 9 introduces features to protect, recover, and audit simulated infrastruct
 
 ### Replay & Observability
 * **Causality Replay**: Parses JSONL log trails, builds parent-child graphs using `parent_event_id` pointers, and detects trace corruption.
-* **Observability Aggregator**: Measures metrics like rollback frequency, deployment duration bounds, and region failure counts.
+* **Observability Aggregator**: Measures metrics like rollback frequency, deployment duration bounds, and region failure counts. Correctly distinguishes `ROLLBACK_INITIATED` (recoverable rollbacks) from `DEPLOYMENT_FAILED` (unrecoverable failures), preventing metric inflation.
+* **Event Semantics**: The `ROLLBACK_INITIATED` event type tracks deployments that entered rollback recovery. The `DEPLOYMENT_FAILED` event type is reserved for true unrecoverable failures. This separation ensures observability dashboards accurately reflect operational health.
 
 ---
 
@@ -289,7 +293,7 @@ python main.py
 ```
 
 ### Running the Tests
-To run the 159 automated unit, integration, and stress tests:
+To run the 168 automated unit, integration, and stress tests:
 ```bash
 pytest tests/ -v
 ```
@@ -299,6 +303,8 @@ pytest tests/ -v
 ## 10. Enterprise CI/CD & Quality Hardening (Phase 10)
 
 The Canary Deployment Simulator features a production-grade continuous validation and quality assurance pipeline. Every commit, merge, and pull request is verified against strict guidelines to ensure governance policies, safety constraints, and resilience patterns are preserved.
+
+All workflows trigger on `main`, `master`, and `ali-akarma/canary-deployment` branches for both push and pull request events.
 
 ```mermaid
 flowchart TD
@@ -330,6 +336,7 @@ flowchart TD
    - **Multi-Version Testing**: Runs the complete test suite (unit, integration, and concurrency stress tests) in parallel across Python `3.10`, `3.11`, and `3.12`.
    - **Environment Isolation**: Executes on clean `ubuntu-latest` environments with automated caching of `pip` dependencies.
    - **Coverage Tracking**: Runs tests using `pytest-cov`, exporting `coverage.xml` and an interactive `htmlcov/` dashboard as retention-safe pipeline artifacts.
+   - **Dynamic Coverage Reporting**: Uploads `coverage.xml` to [Codecov](https://codecov.io/gh/aliakarma/bootcamp-2026-canary-deployment) for live, per-commit coverage tracking with Python version matrix flag merging.
    - **Test summaries**: Automatically parses JUnit XML results and coverage files to generate a Markdown summary table directly in the GitHub Actions Job Summary view.
 
 2. **Quality Assurance (`quality.yml`)**
@@ -367,10 +374,11 @@ pytest
 
 ### Contributor Workflow & Guidelines
 
-1. **Setup Isolated Dev Environment**: Install all development dependencies via `pip install -r requirements.txt`.
+1. **Setup Isolated Dev Environment**: Install all development dependencies via `pip install -r requirements-dev.txt`.
 2. **Adhere to Code Formatting**: All Python code must be formatted with `black` using a max line length of 100 characters.
 3. **Type Annotations**: All new functions and classes must specify type signatures. Run `mypy .` to verify.
 4. **Preserve History & Semantics**: Never modify stable interfaces. All telemetry and governance events must remain backward compatible.
+5. **Dependency Separation**: Runtime dependencies go in `requirements.txt` (currently empty — standard-library-first). Development and quality tools go in `requirements-dev.txt`.
 
 ---
 

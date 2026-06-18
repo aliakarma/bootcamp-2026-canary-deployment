@@ -880,3 +880,91 @@ class TestEdgeCases:
         json_str = json.dumps(d, default=str)
         assert isinstance(json_str, str)
         assert len(json_str) > 0
+
+
+# ======================================================================
+# DeploymentEngine — Rollback Event Semantics
+# ======================================================================
+
+
+class TestRollbackEventSemantics:
+    """Tests verifying correct semantic separation of ROLLBACK_INITIATED
+    vs DEPLOYMENT_FAILED event types."""
+
+    @pytest.fixture
+    def cluster_state(self) -> ClusterState:
+        return ClusterState(generate_cluster(size=10, seed=42))
+
+    def test_rollback_emits_rollback_initiated_not_failed(
+        self, cluster_state: ClusterState
+    ) -> None:
+        """When a health check fails and triggers rollback, the engine should emit
+        ROLLBACK_INITIATED (not DEPLOYMENT_FAILED), because rollback is a recovery
+        flow, not a terminal failure."""
+        from deploy.audit import AuditLogger, DeploymentEventType
+
+        audit = AuditLogger()
+        config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[50, 100],
+            stage_delay_seconds=0.0,
+            health_check_interval=0.0,
+            health_check_fn=lambda cs: False,  # Always fail
+            max_retries_per_stage=0,
+            audit_logger=audit,
+        )
+        engine = DeploymentEngine(cluster_state)
+        result = engine.deploy(config)
+
+        assert result.status == DeploymentStatus.ROLLED_BACK
+
+        events = audit.get_events()
+        event_types = [e.event_type for e in events]
+
+        # ROLLBACK_INITIATED should be present (recovery flow)
+        assert DeploymentEventType.ROLLBACK_INITIATED in event_types
+
+        # DEPLOYMENT_FAILED should NOT be present (this was a recoverable rollback)
+        assert DeploymentEventType.DEPLOYMENT_FAILED not in event_types
+
+        # Verify rollback lifecycle events are present
+        assert DeploymentEventType.ROLLBACK_START in event_types
+        assert DeploymentEventType.ROLLBACK_COMPLETE in event_types
+
+    def test_unrecoverable_error_emits_deployment_failed(self, cluster_state: ClusterState) -> None:
+        """When an unexpected exception occurs during deployment, the engine should
+        emit DEPLOYMENT_FAILED (not ROLLBACK_INITIATED), because this is a true
+        unrecoverable failure."""
+        from deploy.audit import AuditLogger, DeploymentEventType
+
+        audit = AuditLogger()
+
+        # Inject an exception into the health check that propagates unexpectedly
+        # We'll monkeypatch the engine to raise during stage execution
+        config = DeploymentConfig(
+            target_version="2.0.0",
+            stages=[100],
+            stage_delay_seconds=0.0,
+            audit_logger=audit,
+        )
+        engine = DeploymentEngine(cluster_state)
+
+        # Monkeypatch _execute_stage to raise an unexpected exception
+
+        def explosive_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("Catastrophic unexpected failure")
+
+        engine._execute_stage = explosive_execute  # type: ignore[assignment]
+
+        result = engine.deploy(config)
+
+        assert result.status == DeploymentStatus.FAILED
+
+        events = audit.get_events()
+        event_types = [e.event_type for e in events]
+
+        # DEPLOYMENT_FAILED should be present (true unrecoverable error)
+        assert DeploymentEventType.DEPLOYMENT_FAILED in event_types
+
+        # ROLLBACK_INITIATED should NOT be present (no rollback was attempted)
+        assert DeploymentEventType.ROLLBACK_INITIATED not in event_types
