@@ -190,7 +190,11 @@ class TestAuditLogging:
         assert DeploymentEventType.ABORT_RECEIVED in event_types
         assert DeploymentEventType.ROLLBACK_START in event_types
         assert DeploymentEventType.ROLLBACK_COMPLETE in event_types
-        assert DeploymentEventType.DEPLOYMENT_FAILED in event_types
+        assert DeploymentEventType.ROLLBACK_INITIATED in event_types
+
+        # ROLLBACK_INITIATED replaces DEPLOYMENT_FAILED in rollback flows
+        # DEPLOYMENT_FAILED should NOT appear — abort+rollback is a recovery, not a failure
+        assert DeploymentEventType.DEPLOYMENT_FAILED not in event_types
 
         # Verify abort reason
         abort_event = [e for e in events if e.event_type == DeploymentEventType.ABORT_RECEIVED][0]
@@ -219,3 +223,84 @@ class TestAuditLogging:
 
         assert events[0].details["source_version"] == "1.0.0"
         assert events[1].details["servers_rolled_back"] == rolled_back
+
+
+class TestAuditLoggerAtomicOrdering:
+    """Tests verifying that AuditLogger maintains consistent ordering
+    between in-memory events and file-backed JSONL output under concurrency."""
+
+    def test_audit_logger_atomic_ordering(self) -> None:
+        """Verify in-memory event ordering matches file ordering under concurrent writes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = os.path.join(tmpdir, "ordering_test.jsonl")
+            logger = AuditLogger(file_path=file_path)
+            num_threads = 20
+            events_per_thread = 50
+
+            def worker(thread_idx: int) -> None:
+                for i in range(events_per_thread):
+                    event = DeploymentEvent(
+                        event_type=DeploymentEventType.HEALTH_CHECK,
+                        deployment_id=f"dep-{thread_idx}",
+                        details={"thread": thread_idx, "index": i},
+                    )
+                    logger.log(event)
+
+            threads = []
+            for idx in range(num_threads):
+                t = threading.Thread(target=worker, args=(idx,))
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            # Verify counts match
+            memory_events = logger.get_events()
+            assert len(memory_events) == num_threads * events_per_thread
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                file_lines = [line.strip() for line in f if line.strip()]
+            assert len(file_lines) == num_threads * events_per_thread
+
+            # Verify ordering: in-memory event_ids must match file event_ids in same order
+            memory_ids = [e.event_id for e in memory_events]
+            file_ids = [json.loads(line)["event_id"] for line in file_lines]
+            assert memory_ids == file_ids
+
+    def test_concurrent_file_write_ordering(self) -> None:
+        """Verify JSONL file lines are valid JSON and maintain sequential consistency."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = os.path.join(tmpdir, "concurrent_write.jsonl")
+            logger = AuditLogger(file_path=file_path)
+            num_threads = 20
+            events_per_thread = 30
+
+            def worker(thread_idx: int) -> None:
+                for i in range(events_per_thread):
+                    event = DeploymentEvent(
+                        event_type=DeploymentEventType.STAGE_TRANSITION,
+                        deployment_id=f"dep-{thread_idx}",
+                        details={"thread": thread_idx, "seq": i},
+                    )
+                    logger.log(event)
+
+            threads = []
+            for idx in range(num_threads):
+                t = threading.Thread(target=worker, args=(idx,))
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            # Every line must be valid JSON (no interleaving/corruption)
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            assert len(lines) == num_threads * events_per_thread
+            for line in lines:
+                parsed = json.loads(line.strip())
+                assert "event_id" in parsed
+                assert "event_type" in parsed
+                assert "deployment_id" in parsed

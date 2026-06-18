@@ -24,6 +24,7 @@ class OperationalObservabilityLayer:
         failures = 0
         rollbacks_started = 0
         rollbacks_completed = 0
+        rollbacks_initiated = 0
         policy_violations = 0
         approval_requests = 0
         approvals_approved = 0
@@ -55,6 +56,9 @@ class OperationalObservabilityLayer:
 
             elif evt_type == "rollback_complete":
                 rollbacks_completed += 1
+
+            elif evt_type == "rollback_initiated":
+                rollbacks_initiated += 1
 
             elif evt_type == "policy_violation":
                 policy_violations += 1
@@ -92,6 +96,7 @@ class OperationalObservabilityLayer:
             "total_deployments": total_deployments,
             "completions": completions,
             "failures": failures,
+            "rollbacks_initiated": rollbacks_initiated,
             "rollbacks_started": rollbacks_started,
             "rollbacks_completed": rollbacks_completed,
             "rollback_ratio": rollback_ratio,

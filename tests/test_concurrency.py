@@ -178,3 +178,199 @@ class TestConcurrencyStress:
         finally:
             stop_threads.set()
             t_mutator.join()
+
+
+class TestConcurrencyOrderingGuarantees:
+    """Tests verifying ordering consistency guarantees after the AuditLogger
+    atomic single-lock refactor."""
+
+    def test_audit_logger_concurrent_burst_file_ordering(self) -> None:
+        """Verify that file-backed audit logger maintains memory-to-disk ordering
+        consistency under 20-thread concurrent burst writes."""
+        import json
+        import os
+        import tempfile
+
+        from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = os.path.join(tmpdir, "burst_ordering.jsonl")
+            logger = AuditLogger(file_path=file_path)
+            num_threads = 20
+            events_per_thread = 100
+
+            def worker(thread_idx: int) -> None:
+                for i in range(events_per_thread):
+                    event = DeploymentEvent(
+                        event_type=DeploymentEventType.HEALTH_CHECK,
+                        deployment_id=f"dep-burst-{thread_idx}",
+                        details={"thread": thread_idx, "seq": i},
+                    )
+                    logger.log(event)
+
+            threads = []
+            for idx in range(num_threads):
+                t = threading.Thread(target=worker, args=(idx,))
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            # Verify total counts
+            memory_events = logger.get_events()
+            expected_total = num_threads * events_per_thread
+            assert len(memory_events) == expected_total
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                file_lines = [line.strip() for line in f if line.strip()]
+            assert len(file_lines) == expected_total
+
+            # Verify ordering consistency
+            memory_ids = [e.event_id for e in memory_events]
+            file_ids = [json.loads(line)["event_id"] for line in file_lines]
+            assert memory_ids == file_ids
+
+    def test_simultaneous_rollback_logging_ordering(self) -> None:
+        """Verify rollback audit events logged from multiple concurrent rollback
+        triggers maintain atomic ordering consistency."""
+        import json
+        import os
+        import tempfile
+
+        from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = os.path.join(tmpdir, "rollback_ordering.jsonl")
+            logger = AuditLogger(file_path=file_path)
+            num_threads = 10
+
+            def rollback_worker(thread_idx: int) -> None:
+                # Simulate a rollback logging sequence
+                logger.log(
+                    DeploymentEvent(
+                        event_type=DeploymentEventType.ROLLBACK_INITIATED,
+                        deployment_id=f"dep-rb-{thread_idx}",
+                        details={"reason": f"Thread {thread_idx} rollback"},
+                    )
+                )
+                logger.log(
+                    DeploymentEvent(
+                        event_type=DeploymentEventType.ROLLBACK_START,
+                        deployment_id=f"dep-rb-{thread_idx}",
+                        details={"source_version": "1.0.0"},
+                    )
+                )
+                logger.log(
+                    DeploymentEvent(
+                        event_type=DeploymentEventType.ROLLBACK_COMPLETE,
+                        deployment_id=f"dep-rb-{thread_idx}",
+                        details={"servers_rolled_back": [f"server-{thread_idx}"]},
+                    )
+                )
+
+            threads = []
+            for idx in range(num_threads):
+                t = threading.Thread(target=rollback_worker, args=(idx,))
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            # Verify total events
+            memory_events = logger.get_events()
+            assert len(memory_events) == num_threads * 3
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                file_lines = [line.strip() for line in f if line.strip()]
+            assert len(file_lines) == num_threads * 3
+
+            # Verify memory-to-disk ordering consistency
+            memory_ids = [e.event_id for e in memory_events]
+            file_ids = [json.loads(line)["event_id"] for line in file_lines]
+            assert memory_ids == file_ids
+
+            # Verify each thread's 3 events appear in correct relative order
+            for idx in range(num_threads):
+                dep_id = f"dep-rb-{idx}"
+                thread_events = [e for e in memory_events if e.deployment_id == dep_id]
+                assert len(thread_events) == 3
+                assert thread_events[0].event_type == DeploymentEventType.ROLLBACK_INITIATED
+                assert thread_events[1].event_type == DeploymentEventType.ROLLBACK_START
+                assert thread_events[2].event_type == DeploymentEventType.ROLLBACK_COMPLETE
+
+    def test_replay_consistency_under_contention(self) -> None:
+        """Replay a file-backed audit trail produced under concurrent write pressure
+        and verify lineage + timeline integrity."""
+        import json
+        import os
+        import tempfile
+
+        from deploy.audit import AuditLogger, DeploymentEvent, DeploymentEventType
+        from resilience.replay import EventReplayEngine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = os.path.join(tmpdir, "replay_contention.jsonl")
+            logger = AuditLogger(file_path=file_path)
+
+            # Simulate 5 concurrent deployment traces
+            num_deployments = 5
+
+            def deployment_trace(dep_idx: int) -> None:
+                dep_id = f"dep-replay-{dep_idx}"
+                # Record a deployment lifecycle
+                start_evt = DeploymentEvent(
+                    event_type=DeploymentEventType.DEPLOYMENT_START,
+                    deployment_id=dep_id,
+                    details={"target_version": "2.0.0"},
+                )
+                logger.log(start_evt)
+
+                stage_evt = DeploymentEvent(
+                    event_type=DeploymentEventType.STAGE_TRANSITION,
+                    deployment_id=dep_id,
+                    details={"stage_index": 0, "servers_updated": [f"server-{dep_idx}"]},
+                    parent_event_id=start_evt.event_id,
+                )
+                logger.log(stage_evt)
+
+                complete_evt = DeploymentEvent(
+                    event_type=DeploymentEventType.DEPLOYMENT_COMPLETED,
+                    deployment_id=dep_id,
+                    details={"duration_seconds": 1.0},
+                    parent_event_id=stage_evt.event_id,
+                )
+                logger.log(complete_evt)
+
+            threads = []
+            for idx in range(num_deployments):
+                t = threading.Thread(target=deployment_trace, args=(idx,))
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            # Load and replay from file
+            replay = EventReplayEngine()
+            loaded_events = replay.load_audit_trail(file_path)
+
+            assert len(loaded_events) == num_deployments * 3
+
+            # Verify all events are parseable and have required fields
+            for ev in loaded_events:
+                assert "event_id" in ev
+                assert "event_type" in ev
+                assert "deployment_id" in ev
+
+            # Timeline reconstruction should sort deterministically
+            timeline = replay.reconstruct_timeline(loaded_events)
+            assert len(timeline) == num_deployments * 3
+
+            # Verify file ordering matches memory ordering
+            memory_events = logger.get_events()
+            memory_ids = [e.event_id for e in memory_events]
+            with open(file_path, "r", encoding="utf-8") as f:
+                file_ids = [json.loads(line.strip())["event_id"] for line in f if line.strip()]
+            assert memory_ids == file_ids
