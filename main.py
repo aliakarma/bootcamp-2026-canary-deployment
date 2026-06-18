@@ -67,7 +67,7 @@ def main() -> None:
         # Phase 1: Generate cluster
         # ------------------------------------------------------------------
         logger.info("Phase 1: Generating simulated cluster ...")
-        servers = generate_cluster()
+        servers = generate_cluster(seed=2026)
         state = ClusterState(servers)
 
         # ------------------------------------------------------------------
