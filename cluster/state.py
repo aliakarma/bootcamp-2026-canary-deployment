@@ -47,12 +47,26 @@ class ClusterState:
 
     @property
     def servers(self) -> list[Server]:
-        """Return a snapshot list of all servers."""
+        """Return a snapshot list of all servers.
+
+        .. note::
+            The returned list is a fresh copy, but the :class:`Server`
+            objects inside it are the live, shared instances.  Callers
+            must not mutate server fields directly; use the thread-safe
+            ``update_*`` / ``rollback_server`` / ``override_version``
+            methods instead, which acquire the internal lock.
+        """
         with self._lock:
             return list(self._servers.values())
 
     def get_server(self, server_id: str) -> Server | None:
-        """Retrieve a server by its ID, or ``None`` if not found."""
+        """Retrieve a server by its ID, or ``None`` if not found.
+
+        .. note::
+            Returns the live, shared :class:`Server` instance. Treat it as
+            read-only — mutate state through the thread-safe ``update_*`` /
+            ``rollback_server`` / ``override_version`` methods.
+        """
         with self._lock:
             return self._servers.get(server_id)
 
@@ -198,6 +212,39 @@ class ClusterState:
 
             logger.info(
                 "Server %s version: %s → %s",
+                server_id,
+                old_version,
+                new_version,
+            )
+            return True
+
+    def override_version(self, server_id: str, new_version: str) -> bool:
+        """Force a server's current version without recording deployment history.
+
+        This is a thread-safe simulation/diagnostic helper used to model
+        out-of-band configuration drift (a version applied outside the
+        deployment engine).  Unlike :meth:`update_server_version`, it does
+        not touch ``previous_version`` or ``deployment_history`` and does
+        not change the server status.
+
+        Args:
+            server_id: ID of the server to override.
+            new_version: The version string to set as current.
+
+        Returns:
+            ``True`` if the override succeeded, ``False`` if the server was
+            not found.
+        """
+        with self._lock:
+            server = self._servers.get(server_id)
+            if server is None:
+                logger.warning("Cannot override version: server '%s' not found", server_id)
+                return False
+
+            old_version = server.current_version
+            server.current_version = new_version
+            logger.info(
+                "Server %s version OVERRIDDEN (drift): %s → %s",
                 server_id,
                 old_version,
                 new_version,

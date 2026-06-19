@@ -31,10 +31,71 @@ class EventReplayEngine:
             logger.error("Failed to load audit trail file %s: %s", filepath, exc)
         return events
 
-    def reconstruct_timeline(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Sort events deterministically by timestamp to reconstruct execution order."""
-        # Standardise ISO timestamps for sorting
-        return sorted(events, key=lambda e: e.get("timestamp", ""))
+    def reconstruct_timeline(
+        self,
+        events: List[Dict[str, Any]],
+        deployment_id: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Reconstruct execution order, honouring causal parent→child linkage.
+
+        A plain timestamp sort is ambiguous when many events share the same
+        sub-second timestamp.  Instead we order primarily by the recorded
+        ``parent_event_id`` chain (so a parent always precedes its children)
+        and break ties by timestamp, which keeps the order stable and
+        causally correct.
+
+        Args:
+            events: Raw events loaded from one or more audit trails.
+            deployment_id: If provided, only events belonging to that
+                deployment (by ``deployment_id`` or ``correlation_id``) are
+                included — useful when a single audit file aggregates
+                multiple independent deployments.
+        """
+        scoped = self._scope_to_deployment(events, deployment_id)
+
+        # Index events and build the parent → children adjacency map.
+        by_id: Dict[str, Dict[str, Any]] = {e["event_id"]: e for e in scoped if e.get("event_id")}
+        children: Dict[str, List[str]] = {}
+        for ev in scoped:
+            event_id = ev.get("event_id")
+            if not event_id:
+                continue
+            parent = ev.get("parent_event_id")
+            key = parent if (parent and parent in by_id) else "ROOT"
+            children.setdefault(key, []).append(event_id)
+
+        ts = lambda eid: by_id[eid].get("timestamp", "")  # noqa: E731
+
+        # Deterministic DFS from the roots, visiting children in timestamp
+        # order, producing a parent-before-child ordering.
+        ordered: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        stack = sorted(children.get("ROOT", []), key=ts, reverse=True)
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            ordered.append(by_id[node])
+            stack.extend(sorted(children.get(node, []), key=ts, reverse=True))
+
+        # Append any events not reachable from a root (orphans), by timestamp.
+        orphans = [by_id[eid] for eid in by_id if eid not in seen]
+        ordered.extend(sorted(orphans, key=lambda e: e.get("timestamp", "")))
+        return ordered
+
+    @staticmethod
+    def _scope_to_deployment(
+        events: List[Dict[str, Any]], deployment_id: str | None
+    ) -> List[Dict[str, Any]]:
+        """Filter events down to a single deployment, if requested."""
+        if deployment_id is None:
+            return list(events)
+        return [
+            e
+            for e in events
+            if e.get("deployment_id") == deployment_id or e.get("correlation_id") == deployment_id
+        ]
 
     def build_causality_graph(self, events: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """Build a parent-to-child causality map of event UUIDs.
@@ -78,40 +139,53 @@ class EventReplayEngine:
             if parent_id and parent_id == event_id:
                 errors.append(f"Causality corruption: Event {event_id} is its own parent.")
 
-        # Reconstruct path traversal to detect cycles
+        # Reconstruct path traversal to detect cycles. An explicit stack is
+        # used instead of recursion so that very long or malformed audit
+        # trails cannot exhaust Python's recursion limit.
         graph = self.build_causality_graph(events)
-        visited = set()
-        path = set()
+        visited: Set[str] = set()
 
-        def dfs(node: str) -> bool:
-            if node in path:
-                errors.append(f"Causality loop detected: cycle involving event '{node}'")
-                return False
-            if node in visited:
-                return True
-
-            path.add(node)
-            for child in graph.get(node, []):
-                if not dfs(child):
-                    return False
-            path.remove(node)
-            visited.add(node)
-            return True
-
-        roots = graph.get("ROOT", [])
-        for r in roots:
-            dfs(r)
+        for root in graph.get("ROOT", []):
+            # Each frame on the stack is (node, on_path) where on_path marks
+            # the post-visit "pop" that clears the node from the active path.
+            path: Set[str] = set()
+            stack: List[Tuple[str, bool]] = [(root, False)]
+            while stack:
+                node, finishing = stack.pop()
+                if finishing:
+                    path.discard(node)
+                    continue
+                if node in path:
+                    errors.append(f"Causality loop detected: cycle involving event '{node}'")
+                    continue
+                if node in visited:
+                    continue
+                visited.add(node)
+                path.add(node)
+                stack.append((node, True))
+                for child in graph.get(node, []):
+                    stack.append((child, False))
 
         return (len(errors) == 0, errors)
 
     def reconstruct_state_at_step(
-        self, events: List[Dict[str, Any]], step_event_id: str
+        self,
+        events: List[Dict[str, Any]],
+        step_event_id: str,
+        deployment_id: str | None = None,
     ) -> Dict[str, Any]:
         """Reconstruct a virtual view of the cluster state at a specific step in the audit trail.
 
         Iterates sequentially over events up to `step_event_id` and aggregates transitions.
+
+        Args:
+            events: Raw events loaded from one or more audit trails.
+            step_event_id: The event ID to reconstruct state up to (inclusive).
+            deployment_id: If provided, restricts reconstruction to a single
+                deployment so that aggregating multiple deployments in one
+                audit file does not blend unrelated state.
         """
-        timeline = self.reconstruct_timeline(events)
+        timeline = self.reconstruct_timeline(events, deployment_id=deployment_id)
 
         # Virtual model
         virtual_servers: Dict[str, Dict[str, Any]] = {}

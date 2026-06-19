@@ -126,10 +126,10 @@ def analyze(
             f"Failed server percentage ({failed_pct:.1f}%) exceeds threshold "
             f"({thresholds.max_failed_server_percentage:.1f}%)"
         )
-    if unhealthy_pct > thresholds.max_degraded_server_percentage:
+    if unhealthy_pct > thresholds.max_unhealthy_server_percentage:
         failed_checks.append(
             f"Unhealthy server percentage ({unhealthy_pct:.1f}%) exceeds "
-            f"threshold ({thresholds.max_degraded_server_percentage:.1f}%)"
+            f"threshold ({thresholds.max_unhealthy_server_percentage:.1f}%)"
         )
 
     overall_passed = len(failed_checks) == 0

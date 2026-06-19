@@ -62,11 +62,13 @@ def generate_cluster(
     Raises:
         ValueError: If *size* is less than 1.
     """
-    if seed is not None:
-        random.seed(seed)
+    # Use a local RNG instance so cluster generation never mutates the global
+    # ``random`` state (which would couple successive calls and perturb any
+    # other code relying on the module-level RNG).
+    rng = random.Random(seed)
 
     if size is None:
-        size = random.randint(DEFAULT_MIN_SERVERS, DEFAULT_MAX_SERVERS)
+        size = rng.randint(DEFAULT_MIN_SERVERS, DEFAULT_MAX_SERVERS)
     elif size < 1:
         raise ValueError(f"Cluster size must be ≥ 1, got {size}")
 
@@ -88,8 +90,8 @@ def generate_cluster(
             current_version=INITIAL_VERSION,
             previous_version=None,
             status=ServerStatus.HEALTHY,
-            cpu_usage=round(random.uniform(30.0, 70.0), 1),
-            memory_usage=round(random.uniform(30.0, 70.0), 1),
+            cpu_usage=round(rng.uniform(30.0, 70.0), 1),
+            memory_usage=round(rng.uniform(30.0, 70.0), 1),
             last_health_check=now,
             deployment_history=[
                 {
