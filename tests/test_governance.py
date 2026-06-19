@@ -222,6 +222,9 @@ class TestGovernanceEngine:
             stage_delay_seconds=0.0,
             audit_logger=audit,
             governance_coordinator=coordinator,
+            # Pin to a weekday morning so the default RiskPolicy's restricted
+            # window does not block the run regardless of when tests execute.
+            current_time=datetime.datetime(2026, 6, 17, 10, 0),
         )
         engine = DeploymentEngine(cluster_state)
         res = engine.deploy(config)
@@ -253,19 +256,21 @@ class TestGovernanceEngine:
             health_check_fn=lambda cs: False,
             max_retries_per_stage=0,
             audit_logger=audit,
+            # Pin to a weekday morning so the default RiskPolicy's restricted
+            # window does not block the run regardless of when tests execute.
+            current_time=datetime.datetime(2026, 6, 17, 10, 0),
         )
 
         # Setup coordinator where rollback policy blocks rollback
         # We can simulate this by forcing risk score to CRITICAL on the rollback evaluation
         coordinator = GovernanceCoordinator()
-        original_eval_rollback = coordinator.evaluate_rollback
 
-        def mocked_eval_rollback(cs, ds):
-            # Override context to simulate CRITICAL risk score
-            return original_eval_rollback(cs, ds)
-
-        # Let's bind it
-        coordinator.evaluate_rollback = lambda cs, ds, audit_logger=None: GovernanceDecision.BLOCK
+        # Force the rollback checkpoint to BLOCK, simulating a CRITICAL-risk
+        # auto-rollback suspension. Mirrors the coordinator's public signature
+        # (which accepts current_time / audit_logger keyword arguments).
+        coordinator.evaluate_rollback = (
+            lambda cs, ds, current_time=None, audit_logger=None: GovernanceDecision.BLOCK
+        )
         config.governance_coordinator = coordinator
 
         engine = DeploymentEngine(cluster_state)
