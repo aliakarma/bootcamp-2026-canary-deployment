@@ -7,6 +7,7 @@ distribution, and region breakdown.
 
 from __future__ import annotations
 
+import re
 import sys
 
 from cluster.models import ServerStatus
@@ -182,7 +183,5 @@ def _len_ansi_offset(text: str) -> int:
     This is used to compensate ``str.ljust`` / ``:<`` formatting which
     counts escape codes as visible characters.
     """
-    import re
-
     ansi_codes = re.findall(r"\033\[[0-9;]*m", text)
     return sum(len(code) for code in ansi_codes)

@@ -33,11 +33,13 @@ Deployments traverse a formal state machine to ensure consistency. The following
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING
-    PENDING --> RUNNING : start_deployment
-    RUNNING --> COMPLETED : all_stages_succeed
-    RUNNING --> ABORTED : abort_signalled
-    RUNNING --> FAILED : unrecoverable_error / policy_block
-    RUNNING --> ROLLING_BACK : rollback_initiated (health_fail / abort / error)
+    PENDING --> IN_PROGRESS : start_deployment
+    IN_PROGRESS --> PAUSED : inter_stage_wait
+    PAUSED --> IN_PROGRESS : next_stage
+    IN_PROGRESS --> COMPLETED : all_stages_succeed
+    IN_PROGRESS --> ABORTED : abort_signalled
+    IN_PROGRESS --> FAILED : unrecoverable_error / policy_block
+    IN_PROGRESS --> ROLLING_BACK : rollback_initiated (health_fail / abort / error)
     ROLLING_BACK --> ROLLED_BACK : rollback_complete
     ROLLING_BACK --> FAILED : rollback_error / policy_block
     FAILED --> [*]
@@ -48,10 +50,11 @@ stateDiagram-v2
 
 ### Transition Specifications
 
-* **PENDING → RUNNING**: Triggered when `deploy()` is invoked and the deployment passes the initial `evaluate_start` governance checks.
-* **RUNNING → COMPLETED**: Triggered when all stage updates succeed and pass all post-stage health check thresholds.
-* **RUNNING → FAILED**: Triggered ONLY by unrecoverable exceptions or governance policy blocks. Rollback recovery flows do NOT produce this transition.
-* **RUNNING → ROLLING_BACK**: Triggered by a `ROLLBACK_INITIATED` event from a failed stage update, failed health check, or abort signal. Initiates node reversion.
+* **PENDING → IN_PROGRESS**: Triggered when `deploy()` is invoked and the deployment passes the initial `evaluate_start` governance checks.
+* **IN_PROGRESS → PAUSED**: Entered during the inter-stage observation wait; the deployment returns to `IN_PROGRESS` when the next stage begins.
+* **IN_PROGRESS → COMPLETED**: Triggered when all stage updates succeed and pass all post-stage health check thresholds.
+* **IN_PROGRESS → FAILED**: Triggered ONLY by unrecoverable exceptions or governance policy blocks. Rollback recovery flows do NOT produce this transition.
+* **IN_PROGRESS → ROLLING_BACK**: Triggered by a `ROLLBACK_INITIATED` event from a failed stage update, failed health check, or abort signal. Initiates node reversion.
 * **ROLLING_BACK → ROLLED_BACK**: Successfully completes the restoration of all target-version nodes back to the source version.
 * **ROLLING_BACK → FAILED**: Occurs if a governance policy blocks the automatic rollback (e.g. `RollbackPolicy` due to `CRITICAL` risk), leaving the nodes in a partial state.
 

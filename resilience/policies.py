@@ -78,7 +78,14 @@ class UnsafeRecoveryPreventionPolicy(BasePolicy):
 
 
 class RecoveryRetryCeilingPolicy(BasePolicy):
-    """Blocks rollout progression if the recovery retry count exceeds the limit."""
+    """Blocks rollout progression if the recovery retry count exceeds the limit.
+
+    .. note::
+        The ``recovery_attempts`` count is derived from the audit trail and is
+        only populated by :class:`GovernanceCoordinator` when an
+        ``audit_logger`` is supplied to the deployment. Without an audit
+        logger this policy reads a count of 0 and therefore never triggers.
+    """
 
     def __init__(self, max_recovery_attempts: int = 3) -> None:
         super().__init__("RecoveryRetryCeilingPolicy")
@@ -108,7 +115,14 @@ class RecoveryRetryCeilingPolicy(BasePolicy):
 
 
 class RollbackStormPreventionPolicy(BasePolicy):
-    """Blocks automatic rollbacks if a cascade of rollbacks is detected in a short time frame."""
+    """Blocks automatic rollbacks if a cascade of rollbacks is detected in a short time frame.
+
+    .. note::
+        The ``recent_rollbacks`` count is derived from the audit trail and is
+        only populated by :class:`GovernanceCoordinator` when an
+        ``audit_logger`` is supplied to the deployment. Without an audit
+        logger this policy reads a count of 0 and therefore never triggers.
+    """
 
     def __init__(self, max_recent_rollbacks: int = 3) -> None:
         super().__init__("RollbackStormPreventionPolicy")
