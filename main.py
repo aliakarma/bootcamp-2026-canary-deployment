@@ -9,8 +9,9 @@ canary deployment with active health analysis and abort listener support.
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import threading
-from typing import Any
 
 from cluster import ClusterState, generate_cluster, inspect_cluster
 from cluster.models import ServerStatus
@@ -24,21 +25,24 @@ from deploy import (
     save_deployment_state,
     validate_rollback_consistency,
 )
-from deploy.state import DeploymentState
 from governance import (
-    AbortPolicy,
     ApprovalGate,
-    ApprovalPolicy,
     GovernanceCoordinator,
-    HealthPolicy,
-    PolicyEvaluationResult,
-    RiskPolicy,
-    RollbackPolicy,
 )
 from health import HealthThresholds, create_health_check_fn, inject_failures
 from logging_config import get_logger
+from resilience.observability import OperationalObservabilityLayer
+from resilience.quarantine import RegionQuarantineSystem
+from resilience.replay import EventReplayEngine
+from resilience.snapshots import ClusterSnapshotSystem
 
 logger = get_logger(__name__)
+
+# Fixed business-hours clock used for the demo so that governance
+# restricted-window policies (RiskPolicy) behave deterministically no
+# matter which day/time the simulation is actually executed.
+DEMO_CLOCK = datetime.datetime(2026, 6, 17, 10, 0)  # Wednesday morning
+WEEKEND_CLOCK = datetime.datetime(2026, 6, 21, 15, 0)  # Sunday afternoon
 
 
 def main() -> None:
@@ -48,8 +52,6 @@ def main() -> None:
     logger.info("=" * 60)
 
     # Initialize structured event audit logger exporting to logs/audit_trail.jsonl
-    import os
-
     audit_file = "logs/audit_trail.jsonl"
     if os.path.exists(audit_file):
         try:
@@ -97,6 +99,7 @@ def main() -> None:
             abort_event=abort_event,
             audit_logger=audit_logger,
             governance_coordinator=GovernanceCoordinator(),
+            current_time=DEMO_CLOCK,
         )
 
         engine = DeploymentEngine(state)
@@ -218,9 +221,8 @@ def main() -> None:
                 "Simulating configuration drift by changing %s version manually to '2.1.0'",
                 drift_server_id,
             )
-            # Directly modify current_version under state's lock to simulate drift
-            with state._lock:
-                drift_server.current_version = "2.1.0"
+            # Apply drift through the thread-safe public helper (no private lock access).
+            state.override_version(drift_server_id, "2.1.0")
 
         # 4. Validate rollback consistency
         logger.info("Running consistency check on the cluster state ...")
@@ -250,45 +252,27 @@ def main() -> None:
         )
 
         # ------------------------------------------------------------------
-        # Phase 8: Governance Policy Engine Demonstration
+        # Phase 6: Governance Policy Engine Demonstration
         # ------------------------------------------------------------------
         logger.info("=" * 60)
-        logger.info("Phase 8: Governance Policy Engine & Advanced Operational Control")
+        logger.info("Phase 6: Governance Policy Engine & Advanced Operational Control")
         logger.info("=" * 60)
 
         # ------------------------------------------------------------------
-        # Scenario 8a: Weekend Deployment Block
+        # Scenario 6a: Weekend Deployment Block
         # ------------------------------------------------------------------
-        logger.info("Scenario 8a: Weekend Deployment Block (Restricted Window)")
+        logger.info("Scenario 6a: Weekend Deployment Block (Restricted Window)")
 
-        class WeekendRiskPolicy(RiskPolicy):
-            def evaluate(
-                self,
-                cluster_state: ClusterState,
-                deployment_state: DeploymentState,
-                context: dict[str, Any],
-            ) -> PolicyEvaluationResult:
-                # Force Sunday afternoon
-                context["current_time"] = datetime.datetime(2026, 6, 21, 15, 0)
-                return super().evaluate(cluster_state, deployment_state, context)
-
-        coordinator_weekend = GovernanceCoordinator(
-            policies=[
-                RollbackPolicy(),
-                HealthPolicy(),
-                ApprovalPolicy(),
-                AbortPolicy(),
-                WeekendRiskPolicy(),
-            ]
-        )
-
+        # Pin the governance clock to a Sunday afternoon to deterministically
+        # demonstrate the restricted-window block via the default RiskPolicy.
         weekend_config = DeploymentConfig(
             target_version="2.0.0",
             stages=[10, 50, 100],
             stage_delay_seconds=0.1,
             health_check_fn=create_health_check_fn(HealthThresholds()),
-            governance_coordinator=coordinator_weekend,
+            governance_coordinator=GovernanceCoordinator(),
             audit_logger=audit_logger,
+            current_time=WEEKEND_CLOCK,
         )
 
         weekend_cluster = ClusterState(generate_cluster(size=10, seed=42))
@@ -302,10 +286,10 @@ def main() -> None:
         logger.info("Weekend deployment error message: %s", weekend_result.error_message)
 
         # ------------------------------------------------------------------
-        # Scenario 8b: Human Approval Denied Gatekeeper Block
+        # Scenario 6b: Human Approval Denied Gatekeeper Block
         # ------------------------------------------------------------------
         logger.info("-" * 50)
-        logger.info("Scenario 8b: Manual Approval Denied Gatekeeper Block")
+        logger.info("Scenario 6b: Manual Approval Denied Gatekeeper Block")
 
         # Approval gate callback that always denies (simulating operator rejects the prompt/gate)
         approval_gate_deny = ApprovalGate(callback=lambda req: False)
@@ -320,6 +304,7 @@ def main() -> None:
             health_check_fn=create_health_check_fn(HealthThresholds()),
             governance_coordinator=coordinator_deny,
             audit_logger=audit_logger,
+            current_time=DEMO_CLOCK,
         )
 
         deny_cluster = ClusterState(generate_cluster(size=10, seed=42))
@@ -337,10 +322,10 @@ def main() -> None:
         )
 
         # ------------------------------------------------------------------
-        # Scenario 8c: Critical Risk Rollback Suspension (Auto-rollback Suspended)
+        # Scenario 6c: Critical Risk Rollback Suspension (Auto-rollback Suspended)
         # ------------------------------------------------------------------
         logger.info("-" * 50)
-        logger.info("Scenario 8c: CRITICAL Risk Rollback Suspension Block")
+        logger.info("Scenario 6c: CRITICAL Risk Rollback Suspension Block")
 
         suspension_cluster = ClusterState(generate_cluster(size=10, seed=42))
 
@@ -365,6 +350,7 @@ def main() -> None:
             max_retries_per_stage=0,
             governance_coordinator=coordinator_suspend,
             audit_logger=audit_logger,
+            current_time=DEMO_CLOCK,
         )
 
         suspend_engine = DeploymentEngine(suspension_cluster)
@@ -381,15 +367,14 @@ def main() -> None:
         )
 
         # ------------------------------------------------------------------
-        # Phase 9: Operational Resilience, Failure Recovery & Observability
+        # Phase 7: Operational Resilience, Failure Recovery & Observability
         # ------------------------------------------------------------------
         logger.info("=" * 60)
-        logger.info("Phase 9: Operational Resilience, Failure Recovery & Observability")
+        logger.info("Phase 7: Operational Resilience, Failure Recovery & Observability")
         logger.info("=" * 60)
 
         # 1. Snapshot Creation and Restoration Demonstration
-        logger.info("Scenario 9a: Point-in-time Snapshot and safe restoration")
-        from resilience.snapshots import ClusterSnapshotSystem
+        logger.info("Scenario 7a: Point-in-time Snapshot and safe restoration")
 
         snapshot_cluster = ClusterSnapshotSystem(state)
 
@@ -416,8 +401,7 @@ def main() -> None:
 
         # 2. Region Quarantine Demonstration
         logger.info("-" * 50)
-        logger.info("Scenario 9b: Region Quarantine under cascading failure")
-        from resilience.quarantine import RegionQuarantineSystem
+        logger.info("Scenario 7b: Region Quarantine under cascading failure")
 
         quarantine_sys = RegionQuarantineSystem(state)
 
@@ -431,7 +415,7 @@ def main() -> None:
 
         # 3. Quarantine-aware deployment routing
         logger.info("-" * 50)
-        logger.info("Scenario 9c: Quarantine-aware rollout routing")
+        logger.info("Scenario 7c: Quarantine-aware rollout routing")
         routing_config = DeploymentConfig(
             target_version="2.1.0",
             stages=[50, 100],
@@ -455,8 +439,7 @@ def main() -> None:
 
         # 4. Event Replay and Causality Graph
         logger.info("-" * 50)
-        logger.info("Scenario 9d: Event Replay causality graph & timeline reconstruction")
-        from resilience.replay import EventReplayEngine
+        logger.info("Scenario 7d: Event Replay causality graph & timeline reconstruction")
 
         replay_engine = EventReplayEngine()
         loaded_events = replay_engine.load_audit_trail(audit_file)
@@ -470,9 +453,15 @@ def main() -> None:
         timeline = replay_engine.reconstruct_timeline(loaded_events)
         logger.info("Timeline reconstructed. Total replayed events: %d", len(timeline))
 
-        # Verify state reconstruction at the last event
-        last_evt_id = timeline[-1]["event_id"]
-        reconstructed_state = replay_engine.reconstruct_state_at_step(loaded_events, last_evt_id)
+        # Verify state reconstruction at the last event, scoped to that
+        # event's own deployment so multiple deployments in one audit file
+        # are not blended together.
+        last_evt = timeline[-1]
+        last_evt_id = last_evt["event_id"]
+        last_deployment_id = last_evt.get("deployment_id")
+        reconstructed_state = replay_engine.reconstruct_state_at_step(
+            loaded_events, last_evt_id, deployment_id=last_deployment_id
+        )
         logger.info(
             "Reconstructed deployment status at last step: %s",
             reconstructed_state["deployment_status"],
@@ -480,8 +469,7 @@ def main() -> None:
 
         # 5. Observability Metrics
         logger.info("-" * 50)
-        logger.info("Scenario 9e: Operational Observability Layer Metrics Aggregation")
-        from resilience.observability import OperationalObservabilityLayer
+        logger.info("Scenario 7e: Operational Observability Layer Metrics Aggregation")
 
         observability_layer = OperationalObservabilityLayer()
         aggregated_metrics = observability_layer.aggregate_metrics(loaded_events)
@@ -492,24 +480,24 @@ def main() -> None:
         logger.info("  Rollback frequency ratio: %.2f", aggregated_metrics["rollback_ratio"])
 
         # ------------------------------------------------------------------
-        # Phase 7: Structured Event Log Summary Demonstration
+        # Phase 8: Structured Event Log Summary Demonstration
         # ------------------------------------------------------------------
         logger.info("=" * 60)
-        logger.info("Phase 7: Structured Event Audit Log Summary")
+        logger.info("Phase 8: Structured Event Audit Log Summary")
         logger.info("=" * 60)
         logger.info(
             "Total structured events recorded in memory: %d", len(audit_logger.get_events())
         )
         logger.info("Persistent audit file saved to: %s", audit_file)
         logger.info("Sample serialized events (first 5 events):")
-        import json
 
         for idx, ev in enumerate(audit_logger.get_events()[:5]):
             logger.info("  Event %d:\n%s", idx + 1, json.dumps(ev.to_dict(), indent=2))
 
     finally:
-        # Tear down the listener thread cleanly
+        # Tear down the listener thread and audit handle cleanly
         listener.stop()
+        audit_logger.close()
 
 
 if __name__ == "__main__":

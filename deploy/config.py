@@ -9,6 +9,7 @@ controls, and health-check hooks.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,11 @@ class DeploymentConfig:
             integrates with Section 6 (Async ABORT Listener).
         max_retries_per_stage: Number of times a failed health check can
             be retried before the stage is declared failed.
+        current_time: Optional fixed timestamp used for governance policy
+            evaluation (e.g. restricted-window checks in ``RiskPolicy``).
+            When ``None`` the governance coordinator falls back to the
+            system clock.  Pinning this makes governance evaluation
+            deterministic and independent of when the rollout runs.
     """
 
     target_version: str
@@ -58,6 +64,7 @@ class DeploymentConfig:
     audit_logger: Any | None = None  # deploy.audit.AuditLogger
     governance_coordinator: Any | None = None  # governance.coordinator.GovernanceCoordinator
     quarantine_system: Any | None = None  # resilience.quarantine.RegionQuarantineSystem
+    current_time: datetime | None = None  # fixed clock for deterministic governance windows
 
     # ------------------------------------------------------------------
     # Validation

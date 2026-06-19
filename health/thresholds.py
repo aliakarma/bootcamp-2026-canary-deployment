@@ -19,6 +19,9 @@ class HealthThresholds:
         max_server_memory_usage: Maximum allowed memory usage percentage on a single server.
         max_degraded_server_percentage: Maximum allowed percentage of degraded servers in the cluster.
         max_failed_server_percentage: Maximum allowed percentage of failed servers in the cluster.
+        max_unhealthy_server_percentage: Maximum allowed percentage of servers
+            failing their individual health checks (a broader signal than the
+            explicit DEGRADED status count).
         max_cluster_cpu_usage_avg: Maximum allowed average CPU usage percentage across the cluster.
         max_cluster_memory_usage_avg: Maximum allowed average memory usage percentage across the cluster.
         max_server_error_rate: Maximum allowed error rate percentage on a single server.
@@ -29,6 +32,7 @@ class HealthThresholds:
     max_server_memory_usage: float = 90.0
     max_degraded_server_percentage: float = 10.0
     max_failed_server_percentage: float = 0.0
+    max_unhealthy_server_percentage: float = 10.0
     max_cluster_cpu_usage_avg: float = 75.0
     max_cluster_memory_usage_avg: float = 80.0
     max_server_error_rate: float = 5.0

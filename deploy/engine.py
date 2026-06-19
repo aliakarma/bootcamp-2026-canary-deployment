@@ -125,7 +125,7 @@ class DeploymentEngine:
             deployment.target_version,
             deployment.deployment_id,
         )
-        logger.info("  Stages: %s", config)
+        logger.info("  Config: %s", config)
         logger.info("  Total servers: %d", deployment.total_servers)
         logger.info("=" * 60)
 
@@ -162,6 +162,7 @@ class DeploymentEngine:
             decision = config.governance_coordinator.evaluate_start(
                 self._cluster,
                 deployment,
+                current_time=config.current_time,
                 audit_logger=config.audit_logger,
             )
             if decision == GovernanceDecision.BLOCK:
@@ -188,6 +189,7 @@ class DeploymentEngine:
                         deployment,
                         stage_idx,
                         target_pct,
+                        current_time=config.current_time,
                         audit_logger=config.audit_logger,
                     )
                     if decision == GovernanceDecision.BLOCK:
@@ -321,6 +323,7 @@ class DeploymentEngine:
                         deployment,
                         stage_idx,
                         target_pct,
+                        current_time=config.current_time,
                         audit_logger=config.audit_logger,
                     )
                     if decision == GovernanceDecision.BLOCK:
@@ -675,6 +678,7 @@ class DeploymentEngine:
             decision = self._current_config.governance_coordinator.evaluate_rollback(
                 self._cluster,
                 deployment,
+                current_time=self._current_config.current_time,
                 audit_logger=self._current_config.audit_logger,
             )
             if decision == GovernanceDecision.BLOCK:

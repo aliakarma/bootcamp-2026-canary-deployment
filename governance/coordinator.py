@@ -130,10 +130,11 @@ class GovernanceCoordinator:
         deployment_state: DeploymentState,
         stage_index: int,
         target_percentage: int,
+        current_time: datetime.datetime | None = None,
         audit_logger: AuditLogger | None = None,
     ) -> GovernanceDecision:
         """Evaluate policies after stage rollout but before advancing."""
-        context = self._build_context(cluster_state, deployment_state)
+        context = self._build_context(cluster_state, deployment_state, current_time=current_time)
         context["stage_index"] = stage_index
         context["target_percentage"] = target_percentage
         return self._evaluate_checkpoint(
@@ -149,10 +150,11 @@ class GovernanceCoordinator:
         self,
         cluster_state: ClusterState,
         deployment_state: DeploymentState,
+        current_time: datetime.datetime | None = None,
         audit_logger: AuditLogger | None = None,
     ) -> GovernanceDecision:
         """Evaluate policies prior to automatic rollback execution."""
-        context = self._build_context(cluster_state, deployment_state)
+        context = self._build_context(cluster_state, deployment_state, current_time=current_time)
         return self._evaluate_checkpoint(
             cluster_state,
             deployment_state,

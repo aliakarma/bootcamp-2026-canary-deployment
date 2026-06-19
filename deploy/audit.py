@@ -104,6 +104,9 @@ class AuditLogger:
         self.file_path = file_path
         self._events: list[DeploymentEvent] = []
         self._lock = threading.Lock()
+        # Whether the parent directory has already been ensured, so we only
+        # pay the ``os.makedirs`` syscall once rather than on every write.
+        self._dir_ready = False
 
     def log(self, event: DeploymentEvent) -> None:
         """Record a deployment event. Concurrency-safe and exception-safe.
@@ -112,6 +115,10 @@ class AuditLogger:
         to guarantee ordering consistency between memory and disk under
         concurrent logging pressure.
 
+        Each event is appended (and the handle released immediately) so the
+        log file is never held open — callers that rotate or delete the file
+        between runs are unaffected.  The directory is created only once.
+
         Args:
             event: The DeploymentEvent to log.
         """
@@ -119,9 +126,11 @@ class AuditLogger:
             self._events.append(event)
             if self.file_path:
                 try:
-                    dirname = os.path.dirname(self.file_path)
-                    if dirname:
-                        os.makedirs(dirname, exist_ok=True)
+                    if not self._dir_ready:
+                        dirname = os.path.dirname(self.file_path)
+                        if dirname:
+                            os.makedirs(dirname, exist_ok=True)
+                        self._dir_ready = True
                     with open(self.file_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(event.to_dict()) + "\n")
                 except Exception as exc:
@@ -130,6 +139,14 @@ class AuditLogger:
                         self.file_path,
                         exc,
                     )
+
+    def close(self) -> None:
+        """Release audit resources.
+
+        Provided for lifecycle symmetry; events are flushed to disk on every
+        :meth:`log` call, so there is no buffered state to flush here.
+        """
+        return None
 
     def get_events(self) -> list[DeploymentEvent]:
         """Retrieve a copy of all recorded events in memory.

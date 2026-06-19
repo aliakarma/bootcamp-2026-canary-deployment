@@ -26,8 +26,9 @@ build/
 .env
 .env.local
 
-# Log output
+# Log output (including rotated files like canary_deployment.log.1)
 logs/*.log
+logs/*.log.*
 logs/*.jsonl
 logs/*.json
 
@@ -45,3 +46,4 @@ coverage.xml
 
 Plan.md
 forensic_audit_bootcamp-2026-canary-deployment.md
+logs/canary_deployment.log.1
